@@ -30,6 +30,7 @@ jobs:
         run: |
           dbus-run-session -- bash -c '
             mkdir -p "$HOME/.local/share/keyrings"
-            printf "" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            printf "%s" "ci-keyring-password" \
+              | gnome-keyring-daemon --unlock --components=secrets >/dev/null
             REOLINK_SKIP_REAL_MPV=1 ./scripts/check.sh
           '
