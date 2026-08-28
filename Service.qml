@@ -252,8 +252,7 @@ Item {
     if (stream === "main" && !camera.capabilities.stream.clear) return
     var payload = {
       kind: "live", hostId: host.id, address: host.address, username: host.username,
-      rtspPort: host.rtspPort, channel: camera.streamChannel, stream: stream,
-      title: camera.name
+      rtspPort: host.rtspPort, channel: camera.streamChannel, stream: stream
     }
     playerProcess.input = JSON.stringify(payload)
     playerProcess.running = true

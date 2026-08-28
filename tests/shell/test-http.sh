@@ -64,6 +64,9 @@ base=$(jq -cn --arg hostId "$host_id" --argjson port "$port" '{
   hostId:$hostId,address:"127.0.0.1",port:$port,transport:"http",tlsMode:"verify",username:"admin"
 }')
 
+assert_error_code "$(jq -c '. + {operation:"login",ignored:"value"}' <<<"$base")" invalid_request
+assert_error_code "$(jq -c '. + {operation:"login"} | .address="127.0.0.1\u0000.invalid"' <<<"$base")" invalid_request
+
 missing_secret=$(jq -c '.hostId="host_missing_fixture" | .operation="login"' <<<"$base")
 assert_missing_output=""
 set +e
@@ -104,6 +107,11 @@ fi
 if jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[{cmd:"Login",action:0,param:{User:{userName:"admin",password:"injected"}}}]}' <<<"$base" \
   | "$plugin_root/scripts/reolink-http" >/dev/null 2>&1; then
   echo "HTTP helper accepted caller-supplied Login credentials" >&2
+  exit 1
+fi
+if jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[{cmd:"Download",action:0,param:{}}]}' <<<"$base" \
+  | "$plugin_root/scripts/reolink-http" >/dev/null 2>&1; then
+  echo "HTTP helper accepted an unused recording command" >&2
   exit 1
 fi
 

@@ -31,8 +31,9 @@ chmod 700 -- "$XDG_RUNTIME_DIR"
 
 password=$(printf '%s' 'SUPER_SECRET_' 'REOLINK_PASSWORD')
 token=$(printf '%s' 'SUPER_SECRET_' 'REOLINK_TOKEN')
-printf '%s' "$password" | secret-tool store --label='Omarchy Reolink security fixture' \
-  application omarchy-reolink host-id "$host_id" kind password >/dev/null
+jq -cn --arg hostId "$host_id" --arg password "$password" \
+  '{operation:"store",hostId:$hostId,password:$password}' \
+  | "$plugin_root/scripts/reolink-secret" | jq -e '.ok == true' >/dev/null
 
 contains_value() {
   local file="$1" value="$2"

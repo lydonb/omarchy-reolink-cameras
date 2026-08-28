@@ -12,6 +12,8 @@ mkdir -p -- "$HOME"
 
 valid='{"operation":"save","config":{"version":1,"hosts":[{"id":"host_fixture","address":"192.168.1.2","port":443,"rtspPort":554,"transport":"https","tlsMode":"verify","username":"admin","displayName":"Front"}],"cleanupHostIds":[],"preferences":{"notify":{"motion":false}}}}'
 printf '%s' "$valid" | "$plugin_root/scripts/reolink-config" | jq -e '.ok == true' >/dev/null
+! jq -c '.ignored="value"' <<<"$valid" \
+  | "$plugin_root/scripts/reolink-config" >/dev/null 2>&1
 
 config_path="$XDG_CONFIG_HOME/omarchy-reolink/config.json"
 [[ $(stat -c %a -- "${config_path%/*}") == 700 ]]
@@ -51,6 +53,8 @@ fi
 unlink "$XDG_CONFIG_HOME/omarchy-reolink"
 
 bad_bus="unix:path=$test_root/missing-secret-service"
+! printf '%s\n' '{"operation":"exists","hostId":"host_fixture","ignored":"value"}' \
+  | "$plugin_root/scripts/reolink-secret" >/dev/null 2>&1
 if printf '%s\n' '{"operation":"exists","hostId":"host_fixture"}' \
     | DBUS_SESSION_BUS_ADDRESS="$bad_bus" "$plugin_root/scripts/reolink-secret" >/dev/null 2>&1; then
   echo "secret helper reported backend failure as absence" >&2
@@ -74,6 +78,25 @@ jq -e '.error.code == "secret_lookup_failed"' <<<"$http_lookup_error" >/dev/null
 export XDG_RUNTIME_DIR="$test_root/runtime"
 mkdir -m 700 -- "$XDG_RUNTIME_DIR"
 player_lookup='{"kind":"live","hostId":"host_fixture","address":"127.0.0.1","username":"admin","rtspPort":554,"channel":0,"stream":"sub"}'
+! jq -c '.title="ignored"' <<<"$player_lookup" \
+  | "$plugin_root/scripts/reolink-player" >/dev/null 2>&1
+invalid_player_address=$(jq -c '.address="127.0.0.1\u0000.invalid"' <<<"$player_lookup")
+set +e
+invalid_player_output=$(printf '%s\n' "$invalid_player_address" | "$plugin_root/scripts/reolink-player")
+invalid_player_rc=$?
+set -e
+((invalid_player_rc != 0))
+jq -e '.error.code == "invalid_request"' <<<"$invalid_player_output" >/dev/null
+invalid_recording=$(jq -cn '{
+  kind:"recording",hostId:"host_fixture",address:"127.0.0.1",transport:"https",
+  tlsMode:"verify",port:443,token:"SAFE_SESSION_TOKEN",playbackPath:"/recordings/bad\u0000.mp4"
+}')
+set +e
+invalid_recording_output=$(printf '%s\n' "$invalid_recording" | "$plugin_root/scripts/reolink-player")
+invalid_recording_rc=$?
+set -e
+((invalid_recording_rc != 0))
+jq -e '.error.code == "invalid_request"' <<<"$invalid_recording_output" >/dev/null
 set +e
 player_lookup_error=$(printf '%s\n' "$player_lookup" \
   | DBUS_SESSION_BUS_ADDRESS="$bad_bus" "$plugin_root/scripts/reolink-player")

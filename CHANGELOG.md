@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.2.1 - 2026-08-28
+
+- Reject ignored or malformed helper fields before Bash extraction and remove
+  unused recording commands from the generic camera API allowlist.
+- Bound camera capability, channel, device metadata, event, and response
+  traversal so a malformed host cannot exhaust or destabilize the shell.
+- Sanitize camera-supplied recording labels and reject unsafe playback paths
+  before they reach the hardened player.
+
 ## 0.2.0 - 2026-08-28
 
 - Document working HTTPS/self-signed, RTSP, local-account, and HTTP redirect

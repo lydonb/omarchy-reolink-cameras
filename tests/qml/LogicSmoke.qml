@@ -102,6 +102,32 @@ ShellRoot {
     ])
     assertTrue(!noStreamCapabilities.stream.fluent && !noStreamCapabilities.stream.clear
       && !noStreamCapabilities.stream.rtspEnabled, "unknown streams were enabled")
+    var deepAbility = ({})
+    var deepCursor = deepAbility
+    for (var depthIndex = 0; depthIndex < 128; depthIndex += 1) {
+      deepCursor.nested = ({})
+      deepCursor = deepCursor.nested
+    }
+    deepCursor.search = { ver: 1 }
+    var deepCapabilities = Capabilities.normalize([
+      { cmd: "GetAbility", code: 0, value: deepAbility }
+    ])
+    assertTrue(!deepCapabilities.recordings,
+      "unbounded capability traversal accepted a deeply nested camera response")
+    var excessiveStatuses = []
+    for (var statusIndex = 0; statusIndex < 80; statusIndex += 1)
+      excessiveStatuses.push({ channel: statusIndex, name: "Camera\u0000" + "x".repeat(100), online: 1 })
+    var boundedChannels = Capabilities.channels([
+      { cmd: "GetChannelstatus", code: 0, value: { status: excessiveStatuses } }
+    ], "Fallback")
+    assertTrue(boundedChannels.length === 64 && boundedChannels[0].name.length <= 80
+      && boundedChannels[0].name.indexOf("\u0000") === -1,
+      "camera discovery did not bound or sanitize channel metadata")
+    var boundedInfo = Capabilities.deviceInfo([
+      { cmd: "GetDevInfo", code: 0, value: { DevInfo: { model: "m".repeat(200) + "\u0000" } } }
+    ])
+    assertTrue(boundedInfo.model.length === 80 && boundedInfo.model.indexOf("\u0000") === -1,
+      "device metadata was not bounded and sanitized")
 
     var eventTime = new Date(2026, 7, 28, 16, 1, 30).getTime()
     var eventRange = Time.aroundRange(eventTime, 300, 300)
@@ -126,13 +152,22 @@ ShellRoot {
         name: "unplayable.mp4", type: "main",
         StartTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 1, sec: 20 },
         EndTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 1, sec: 40 }
+      },
+      {
+        name: "/mnt/reolink/bad\u0000recording.mp4", type: "main\u0000spoof",
+        StartTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 1, sec: 20 },
+        EndTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 1, sec: 40 }
       }
     ] } } }]
     var parsedRecordings = Model.parseRecordings(recordingResponse, endpoint.value.id, 0)
-    assertTrue(parsedRecordings.length === 3
+    assertTrue(parsedRecordings.length === 4
       && parsedRecordings[1].playbackPath === "/mnt/reolink/event.mp4"
       && parsedRecordings[1].startMs > 0,
       "Reolink Search filename was not normalized as a playable recording")
+    assertTrue(parsedRecordings[3].playbackPath === ""
+      && parsedRecordings[3].name.indexOf("\u0000") === -1
+      && parsedRecordings[3].type.indexOf("\u0000") === -1,
+      "malformed recording metadata crossed the playback or display boundary")
     var matchingEvent = {
       hostId: endpoint.value.id, channel: 0, type: "person", timestamp: eventTime
     }
@@ -214,6 +249,21 @@ ShellRoot {
     } }]
     var active = Events.activeStates(rawEvents, endpoint.value.id)
     assertTrue(active.length === 2, "event normalization failed")
+    var deepEventValue = ({ channel: 0 })
+    var deepEventCursor = deepEventValue
+    for (var eventDepth = 0; eventDepth < 128; eventDepth += 1) {
+      deepEventCursor.nested = ({})
+      deepEventCursor = deepEventCursor.nested
+    }
+    deepEventCursor.people = { alarm_state: 1 }
+    assertTrue(Events.activeStates([
+      { cmd: "GetEvents", code: 0, value: deepEventValue }
+    ], endpoint.value.id).length === 0,
+      "unbounded event traversal accepted a deeply nested camera response")
+    assertTrue(Events.activeStates([
+      { cmd: "GetEvents", code: 0, value: { channel: 64, md: { alarm_state: 1 } } }
+    ], endpoint.value.id).length === 0,
+      "event normalization accepted an invalid camera channel")
     var first = Events.risingEdges({}, active, 20000, 10000)
     var repeated = Events.risingEdges(first.state, active, 21000, 10000)
     assertTrue(first.events.length === 2 && repeated.events.length === 0, "event debounce failed")

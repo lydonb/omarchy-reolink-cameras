@@ -21,6 +21,14 @@ if IFS= read -r -t 0.05 -n 1 trailing; then
 fi
 jq -e 'type == "object"' <<<"$request" >/dev/null 2>&1 \
   || fail "invalid_request" "Configuration request must be exactly one JSON object."
+jq -e '
+  (.operation == "load" and (keys | sort) == ["operation"])
+  or (.operation == "clear" and (keys | sort) == ["operation"])
+  or (.operation == "save" and (keys | sort) == ["config","operation"] and (.config | type == "object"))
+  or (.operation == "purge-host" and (keys | sort) == ["hostId","operation"]
+    and (.hostId | type == "string" and test("^host_[A-Za-z0-9_-]{1,96}$")))
+' <<<"$request" >/dev/null 2>&1 \
+  || fail "invalid_request" "Configuration request contains invalid or unsupported fields."
 
 operation=$(jq -r '.operation // ""' <<<"$request")
 config_home=${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}

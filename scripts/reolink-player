@@ -49,8 +49,50 @@ terminate_child() {
   wait "$pid" 2>/dev/null || true
 }
 
+validate_controller_request() {
+  jq -e '
+    def host:
+      (.hostId | type == "string" and test("^host_[A-Za-z0-9_-]{1,96}$"))
+      and (.address | type == "string" and test("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
+        and ((contains("..") or contains(".-") or contains("-.")) | not));
+    host and
+    if .kind == "live" then
+      (keys | sort) == ["address","channel","hostId","kind","rtspPort","stream","username"]
+      and (.username | type == "string" and test("^[A-Za-z0-9._@+-]{1,64}$"))
+      and (.rtspPort | type == "number" and floor == . and . >= 1 and . <= 65535)
+      and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
+      and (.stream == "sub" or .stream == "main")
+    elif .kind == "recording" then
+      (keys | sort) == ["address","hostId","kind","playbackPath","port","tlsMode","token","transport"]
+      and (.transport == "http" or .transport == "https")
+      and (.tlsMode == "verify" or .tlsMode == "insecure")
+      and (.port | type == "number" and floor == . and . >= 1 and . <= 65535)
+      and (.token | type == "string" and test("^[A-Za-z0-9._~-]{1,256}$"))
+      and (.playbackPath | type == "string" and length >= 1 and length <= 4096
+        and startswith("/") and (test("[\u0000-\u001f\u007f]") | not)
+        and ((contains("://") or contains("\\\\") or contains("#")) | not))
+    else false end
+  ' <<<"$request" >/dev/null 2>&1 \
+    || fail "invalid_request" "Player request contains invalid or unsupported fields."
+}
+
+validate_worker_request() {
+  jq -e '
+    (keys | sort) == ["kind","mediaUrl","parentPid","runDir","socket","statusFile","tlsMode","transport"]
+    and (.parentPid | type == "number" and floor == . and . > 1)
+    and (.runDir | type == "string" and length >= 1 and length <= 4096 and (test("[\u0000-\u001f\u007f]") | not))
+    and (.socket | type == "string" and length >= 1 and length <= 4096 and (test("[\u0000-\u001f\u007f]") | not))
+    and (.statusFile | type == "string" and length >= 1 and length <= 4096 and (test("[\u0000-\u001f\u007f]") | not))
+    and (.kind == "live" or .kind == "recording")
+    and (.mediaUrl | type == "string" and length >= 1 and length <= 16384 and (test("[\u0000-\u001f\u007f]") | not))
+    and (.transport | type == "string") and (.tlsMode | type == "string")
+  ' <<<"$request" >/dev/null 2>&1 \
+    || fail "invalid_request" "Player worker request contains invalid or unsupported fields."
+}
+
 worker_main() {
   read_bounded_request
+  validate_worker_request
   local parent_pid run_dir socket status_file kind media_url transport tls_mode
   local runtime_base runtime_dir status_tmp mpv_pid="" ipc_payload state
   parent_pid=$(jq -r '.parentPid // 0' <<<"$request")
@@ -163,6 +205,7 @@ fi
 
 request=""
 read_bounded_request
+validate_controller_request
 
 lookup_password() {
   local lookup_output lookup_rc

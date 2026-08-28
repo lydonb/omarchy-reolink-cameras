@@ -54,6 +54,34 @@ if printf '%s\n' "$payload" | "$plugin_root/scripts/reolink-snapshot-export" >/d
 fi
 chmod 600 -- "$source"
 
+hardlink="$test_root/source-hardlink.jpg"
+ln -- "$source" "$hardlink"
+if printf '%s\n' "$payload" | "$plugin_root/scripts/reolink-snapshot-export" >/dev/null 2>&1; then
+  echo "snapshot export accepted a multiply linked cache file" >&2
+  exit 1
+fi
+rm -- "$hardlink"
+
+mv -- "$source" "$source.valid"
+printf 'NOT_A_JPEG' >"$source"
+chmod 600 -- "$source"
+if printf '%s\n' "$payload" | "$plugin_root/scripts/reolink-snapshot-export" >/dev/null 2>&1; then
+  echo "snapshot export accepted invalid image data" >&2
+  exit 1
+fi
+rm -- "$source"
+mv -- "$source.valid" "$source"
+
+date_dir="$HOME/Pictures/Reolink/$(date '+%Y-%m-%d')"
+mv -- "$date_dir" "$date_dir.real"
+ln -s -- "$test_root" "$date_dir"
+if printf '%s\n' "$payload" | "$plugin_root/scripts/reolink-snapshot-export" >/dev/null 2>&1; then
+  echo "snapshot export followed a dated Pictures symlink" >&2
+  exit 1
+fi
+unlink "$date_dir"
+mv -- "$date_dir.real" "$date_dir"
+
 mv -- "$HOME/Pictures/Reolink" "$HOME/Pictures/Reolink.real"
 ln -s -- "$test_root" "$HOME/Pictures/Reolink"
 if printf '%s\n' "$payload" | "$plugin_root/scripts/reolink-snapshot-export" >/dev/null 2>&1; then

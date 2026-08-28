@@ -27,6 +27,11 @@ login helper to `Service.qml` is the sole intentional token transport. It is
 not forwarded to a terminal or log. This is the necessary exception to the
 otherwise blanket rule that tokens never appear in helper output.
 
+Every helper rejects ignored top-level fields and validates string types and
+control characters before extracting values into Bash. Camera-provided object
+traversal, channel inventories, event states, metadata, and recording lists are
+bounded before they enter the long-lived QML shell.
+
 Before storing a password, the service durably writes its non-secret host ID
 to the cleanup ledger. The ID is removed only in the same committed config
 update as a validated host, or after Secret Service confirms the password was

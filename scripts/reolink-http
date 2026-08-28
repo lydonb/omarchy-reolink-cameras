@@ -62,9 +62,48 @@ monotonic_ms() {
 
 command_allowed() {
   case "$1" in
-    Logout|GetDevInfo|GetAbility|GetChannelstatus|GetChnTypeInfo|GetNetPort|GetEnc|Snap|GetEvents|GetAiState|GetMdState|PtzCtrl|GetPtzPreset|StartZoomFocus|GetWhiteLed|SetWhiteLed|GetAudioAlarm|SetAudioAlarm|GetAudioAlarmV20|SetAudioAlarmV20|Search|Playback|Download|NvrDownload) return 0 ;;
+    Logout|GetDevInfo|GetAbility|GetChannelstatus|GetChnTypeInfo|GetNetPort|GetEnc|GetEvents|GetAiState|GetMdState|PtzCtrl|GetPtzPreset|StartZoomFocus|GetWhiteLed|SetWhiteLed|GetAudioAlarm|SetAudioAlarm|GetAudioAlarmV20|SetAudioAlarmV20|Search) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+validate_envelope() {
+  jq -e '
+    def common:
+      (.hostId | type == "string" and test("^host_[A-Za-z0-9_-]{1,96}$"))
+      and (.address | type == "string" and test("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
+        and ((contains("..") or contains(".-") or contains("-.")) | not))
+      and (.port | type == "number" and floor == . and . >= 1 and . <= 65535)
+      and (.transport == "http" or .transport == "https")
+      and (.tlsMode == "verify" or .tlsMode == "insecure")
+      and (.username | type == "string" and test("^[A-Za-z0-9._@+-]{1,64}$"));
+    common and
+    if .operation == "login" then
+      (keys | sort) == ["address","hostId","operation","port","tlsMode","transport","username"]
+    elif .operation == "api" then
+      (keys | sort) == ["address","body","hostId","operation","port","tlsMode","token","transport","username"]
+      and (.token | type == "string" and test("^[A-Za-z0-9._~-]{1,256}$"))
+      and (.body | type == "array")
+    elif .operation == "snapshot" then
+      (keys | sort) == ["address","channel","hostId","operation","port","tlsMode","token","transport","username"]
+      and (.token | type == "string" and test("^[A-Za-z0-9._~-]{1,256}$"))
+      and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
+    elif .operation == "ptz-pulse" then
+      (keys | sort) == ["address","channel","direction","durationMs","hostId","operation","port","tlsMode","token","transport","username"]
+      and (.token | type == "string" and test("^[A-Za-z0-9._~-]{1,256}$"))
+      and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
+      and (.direction | IN("Left","Right","Up","Down"))
+      and (.durationMs | type == "number" and floor == . and . >= 100 and . <= 1500)
+    elif .operation == "ptz-guardian" then
+      (keys | sort) == ["address","channel","direction","durationMs","hostId","operation","parentPid","port","tlsMode","token","transport","username"]
+      and (.token | type == "string" and test("^[A-Za-z0-9._~-]{1,256}$"))
+      and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
+      and (.direction | IN("Left","Right","Up","Down"))
+      and (.durationMs | type == "number" and floor == . and . >= 100 and . <= 1500)
+      and (.parentPid | type == "number" and floor == . and . > 1)
+    else false end
+  ' <<<"$request" >/dev/null 2>&1 \
+    || fail "invalid_request" "HTTP request contains invalid or unsupported fields."
 }
 
 curl_json() {
@@ -211,7 +250,7 @@ validate_api_body() {
 
 validate_api_response() {
   local response="$1" body="$2"
-  jq -e 'type == "array" and length >= 1
+  jq -e 'type == "array" and length >= 1 and length <= 64
       and all(.[]; (.code | type == "number") and (.code | floor) == .code)' \
     <<<"$response" >/dev/null 2>&1 \
     || fail "invalid_response" "Camera API response entries require numeric status codes."
@@ -280,6 +319,7 @@ best_effort_ptz_stop() {
 
 request=""
 read_request
+validate_envelope
 operation=$(jq -r '.operation // ""' <<<"$request")
 host_id=$(jq -r '.hostId // ""' <<<"$request")
 address=$(jq -r '.address // ""' <<<"$request")
@@ -326,7 +366,7 @@ case "$operation" in
     validate_api_body "$body"
     first_command=$(jq -r '.[0].cmd' <<<"$body")
     cap=$JSON_LIMIT
-    jq -e 'any(.[]; .cmd == "Search" or .cmd == "Playback" or .cmd == "Download" or .cmd == "NvrDownload")' \
+    jq -e 'any(.[]; .cmd == "Search")' \
       <<<"$body" >/dev/null && cap=$RECORDING_LIMIT
     response=""
     if ! response=$(curl_json "$base_url?cmd=${first_command}&token=${token}" "$body" "$cap" "$tls_mode"); then
