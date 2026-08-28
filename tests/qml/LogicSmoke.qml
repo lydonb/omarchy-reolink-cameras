@@ -61,6 +61,12 @@ ShellRoot {
       { cmd: "Login", code: 0, value: { Token: { name: "SAFE_TOKEN", leaseTime: 3600 } } }
     ], 1000)
     assertTrue(login.ok && login.expiresAt === 3601000, "login session normalization failed")
+    var tlsFailure = Model.loginProcessResult({
+      ok: false, error: { code: "tls_error", message: "Camera TLS verification or negotiation failed." }
+    }, 1000, false)
+    assertTrue(!tlsFailure.ok
+      && tlsFailure.error === "Camera TLS verification or negotiation failed.",
+      "camera helper failure was hidden behind a generic authentication error")
 
     var bootstrap = [
       { cmd: "GetDevInfo", code: 0, value: { DevInfo: { model: "RLC-Test", firmVer: "v1" } } },

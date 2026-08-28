@@ -591,8 +591,9 @@ Item {
       callback = null
       var parsed = null
       try { parsed = JSON.parse(String(testOutput.text || "")) } catch (error) {}
-      var session = parsed ? Model.loginSession(parsed, Date.now()) : ({ ok: false, error: "Camera returned an invalid login response." })
-      var ok = exitStatus === 0 && exitCode === 0 && session.ok
+      var processOk = exitStatus === 0 && exitCode === 0
+      var session = Model.loginProcessResult(parsed, Date.now(), processOk)
+      var ok = processOk && session.ok
       if (callbackValue) callbackValue(ok, ok ? "" : String(session.error || "Camera test failed."))
     }
   }
