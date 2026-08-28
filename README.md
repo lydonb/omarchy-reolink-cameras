@@ -3,15 +3,15 @@
 A native, local-first Omarchy bar plugin for quickly checking Reolink cameras,
 NVRs, and Home Hubs on your LAN.
 
-![Reolink Cameras interface concept](preview.png)
+![Reolink Cameras live panel with sanitized camera data](preview.png)
 
-_Interface concept; a sanitized live-device screenshot will replace it after
-the hardware-validation matrix is complete._
+_Sanitized live-panel capture; device labels and the camera snapshot have been
+replaced for privacy._
 
 The panel uses private local JPEG snapshots. Fluent and Clear video open in
 stock `mpv`; no media framework or camera daemon is added to Omarchy.
 
-> **Development status:** `0.2.4` is an experimental hardware-validation build,
+> **Development status:** `0.2.5` is an experimental hardware-validation build,
 > not a tagged V1 release. The fixture inventory, helper, QML, live-shell, and
 > secret-leak gates pass on Omarchy 4.0.1.
 > Real Reolink hardware coverage is still being recorded; see
@@ -38,9 +38,9 @@ systemd service, or package-install step.
 omarchy plugin add https://github.com/rodrix2000/omarchy-reolink-cameras --enable
 ```
 
-The plugin starts with no configured cameras. Open the camera icon, choose
-**Add**, and enter local Reolink device credentials. Reolink cloud credentials
-are not used.
+The plugin starts with no configured cameras. Open the CCTV/security-camera
+icon (`󰞮`), choose **Add**, and enter local Reolink device credentials. Reolink
+cloud credentials are not used.
 
 Prefer:
 
@@ -77,10 +77,13 @@ Use a bare LAN address rather than a URL. A typical powered Reolink setup is:
 | Display name | Any local label, such as `Front Door` |
 
 `Share Device` links and Reolink account email credentials are not local
-device credentials and cannot be used here. Models without **User Management**
-may expose only the built-in `admin` account. Battery-family devices generally
-need a compatible Home Hub; configure the Hub address and local credentials in
-that topology.
+device credentials and cannot be used here. Some devices do not show a
+username field or **User Management** screen in the Reolink app. Those devices
+may still authenticate locally with the built-in lowercase username `admin`
+and the device password configured in the device's settings. Keep the plugin's
+**Username** field set to `admin` unless you explicitly configured another
+local device user. Battery-family devices generally need a compatible Home
+Hub; configure the Hub address and local credentials in that topology.
 
 See Reolink's official
 [port configuration guide](https://support.reolink.com/articles/900000621783-How-to-Configure-Reolink-Ports-Settings/)

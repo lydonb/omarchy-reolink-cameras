@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.2.5 - 2026-08-28
+
+- Replace the interface concept with a sanitized capture of the real panel and
+  identify the new CCTV/security-camera icon in setup instructions.
+- Clarify that devices without a visible username or User Management screen
+  may still use lowercase `admin` with a separately configured device password.
+
 ## 0.2.4 - 2026-08-28
 
 - Replace the generic camera glyph with the distinct CCTV/security-camera icon
