@@ -2,8 +2,17 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-08-28
+
 - Document working HTTPS/self-signed, RTSP, local-account, and HTTP redirect
   setup paths for Reolink devices.
+- Make event **View** search a bounded window on the event's exact host and
+  channel, select the containing or nearest playable recording, and open it
+  through the hardened mpv helper.
+- Accept the absolute `name` returned by Reolink recording searches as the
+  playback path when no dedicated path field is present.
+- Split snapshot refresh from **Save Photo** and export private JPEG copies to
+  the XDG Pictures directory under `Reolink/YYYY-MM-DD`.
 
 ## 0.1.2 - 2026-08-28
 

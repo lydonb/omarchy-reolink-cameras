@@ -21,7 +21,7 @@ assert_rejected() {
     <<<"$output" >/dev/null
 }
 
-for helper_name in reolink-config reolink-secret reolink-http reolink-player; do
+for helper_name in reolink-config reolink-secret reolink-http reolink-player reolink-snapshot-export; do
   helper="$plugin_root/scripts/$helper_name"
   assert_rejected "$helper" multiple
   assert_rejected "$helper" oversized

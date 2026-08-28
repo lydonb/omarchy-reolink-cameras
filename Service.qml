@@ -23,6 +23,7 @@ Item {
     ? String(manifest.__sourceDir) : ""
   readonly property string httpHelper: pluginRoot + "/scripts/reolink-http"
   readonly property string playerHelper: pluginRoot + "/scripts/reolink-player"
+  readonly property string snapshotExportHelper: pluginRoot + "/scripts/reolink-snapshot-export"
   readonly property string secretHelper: pluginRoot + "/scripts/reolink-secret"
   readonly property string configHelper: pluginRoot + "/scripts/reolink-config"
 
@@ -41,6 +42,7 @@ Item {
   property string notice: ""
   property var runtimes: ({})
   property bool addInProgress: false
+  property bool snapshotExportInProgress: false
 
   readonly property int onlineCount: {
     var count = 0
@@ -67,6 +69,13 @@ Item {
   function cameraForId(cameraId) {
     for (var index = 0; index < cameras.length; index += 1)
       if (cameras[index].id === cameraId) return cameras[index]
+    return null
+  }
+
+  function cameraForHostChannel(hostId, channel) {
+    for (var index = 0; index < cameras.length; index += 1)
+      if (cameras[index].hostId === hostId && Number(cameras[index].channel) === Number(channel))
+        return cameras[index]
     return null
   }
 
@@ -134,6 +143,25 @@ Item {
     if (runtime) runtime.requestSnapshot(camera)
   }
 
+  function exportSnapshot(cameraId) {
+    var camera = cameraForId(cameraId)
+    if (!camera || !camera.snapshotPath) {
+      lastError = "Refresh the camera snapshot before saving it."
+      return
+    }
+    if (snapshotExportProcess.running) {
+      lastError = "Another snapshot export is already in progress."
+      return
+    }
+    lastError = ""
+    notice = "Saving snapshot to Pictures…"
+    snapshotExportInProgress = true
+    snapshotExportProcess.input = JSON.stringify({
+      operation: "export", hostId: camera.hostId, channel: Number(camera.channel)
+    })
+    snapshotExportProcess.running = true
+  }
+
   function refreshAll() {
     for (var hostId in runtimes) if (runtimes[hostId]) runtimes[hostId].refresh()
   }
@@ -189,6 +217,30 @@ Item {
     if (!recording) return
     var runtime = runtimeForHost(recording.hostId)
     if (runtime) runtime.playRecording(recording)
+  }
+
+  function viewEvent(event) {
+    if (!event) return false
+    var camera = cameraForHostChannel(String(event.hostId || ""), Number(event.channel))
+    if (!camera) {
+      lastError = "This event belongs to a camera that is no longer configured."
+      return false
+    }
+    var runtime = runtimeForHost(camera.hostId)
+    if (!runtime) {
+      lastError = "The event camera is not currently available."
+      return false
+    }
+    selectedCameraId = camera.id
+    requestSnapshot(camera.id)
+    if (!camera.capabilities.recordings) {
+      lastError = "Recording playback is unavailable; the current snapshot was refreshed instead."
+      return true
+    }
+    notice = "Finding the " + Events.label(event.type).toLowerCase() + " recording…"
+    lastError = ""
+    runtime.openEventRecording(event)
+    return true
   }
 
   function launchLive(stream) {
@@ -374,6 +426,8 @@ Item {
       root.hosts = nextHosts
       root.cleanupHostIds = Model.removeCleanupHostId(root.cleanupHostIds, hostId)
       root.cameras = Model.replaceHostCameras(root.cameras, hostId, [])
+      root.events = root.events.filter(function(event) { return event.hostId !== hostId })
+      root.recordings = root.recordings.filter(function(recording) { return recording.hostId !== hostId })
       if (!root.cameraForId(root.selectedCameraId))
         root.selectedCameraId = root.cameras.length ? root.cameras[0].id : ""
       root.saveConfig(function(saveOk, saveMessage) {
@@ -610,6 +664,24 @@ Item {
       var parsed = null
       try { parsed = JSON.parse(String(playerOutput.text || "")) } catch (error) {}
       root.lastError = parsed && parsed.error ? String(parsed.error.message) : "Could not open mpv."
+    }
+  }
+
+  Process {
+    id: snapshotExportProcess
+    property string input: ""
+    command: ["/usr/bin/bash", root.snapshotExportHelper]
+    stdinEnabled: true
+    stdout: StdioCollector { id: snapshotExportOutput; waitForEnd: true }
+    onStarted: { write(input + "\n"); input = "" }
+    onExited: function(exitCode, exitStatus) {
+      root.snapshotExportInProgress = false
+      var parsed = null
+      try { parsed = JSON.parse(String(snapshotExportOutput.text || "")) } catch (error) {}
+      var ok = exitStatus === 0 && exitCode === 0 && parsed && parsed.ok === true
+      root.notice = ok ? "Snapshot saved to " + String(parsed.path) : ""
+      root.lastError = ok ? "" : parsed && parsed.error
+        ? String(parsed.error.message) : "Snapshot could not be saved."
     }
   }
 

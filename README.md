@@ -11,7 +11,7 @@ the hardware-validation matrix is complete._
 The panel uses private local JPEG snapshots. Fluent and Clear video open in
 stock `mpv`; no media framework or camera daemon is added to Omarchy.
 
-> **Development status:** `0.1.2` is an experimental hardware-validation build,
+> **Development status:** `0.2.0` is an experimental hardware-validation build,
 > not a tagged V1 release. The fixture inventory, helper, QML, live-shell, and
 > secret-leak gates pass on Omarchy 4.0.1.
 > Real Reolink hardware coverage is still being recorded; see
@@ -96,6 +96,20 @@ for current app menus and model-specific availability.
 | `Camera returned HTTP status 401.` or `403.` | The endpoint rejected authorization. Recheck the local account and device-access mode. |
 | `Camera network request failed.` | Confirm the bare IP address, enabled HTTPS port, same-LAN reachability, and local firewall rules. |
 
+## Using snapshots and events
+
+**Refresh Snapshot** replaces the private preview image in the panel; it does
+not create a file in Pictures. **Save Photo** copies the current preview into
+the desktop's configured Pictures directory at
+`Reolink/YYYY-MM-DD/Reolink-YYYY-MM-DD_HH-MM-SS…jpg`.
+
+An event's **View** action selects the event's exact camera, refreshes its
+snapshot, searches a bounded five-minute window on either side of the event,
+and opens the containing or nearest playable recording in stock `mpv`. Event
+playback requires recording search support and an available camera, SD-card,
+NVR, or Home Hub recording. A clear message is shown when no matching recording
+is available.
+
 ## What is implemented
 
 - `service` + `bar-widget` inside the existing `omarchy-shell`;
@@ -103,11 +117,15 @@ for current app menus and model-specific availability.
 - Secret Service password storage and private non-secret configuration;
 - host/channel/capability discovery;
 - snapshot-first panel with a private bounded cache;
+- explicit snapshot refresh plus private photo export to the XDG Pictures
+  directory, organized under `Reolink/YYYY-MM-DD`;
 - Fluent/sub and Clear/main playback through hardened mpv IPC;
 - batched per-host event polling, rising edges, cooldown, unseen badge, and
   safe UI-only notification clicks;
 - capability-gated PTZ, presets, zoom, spotlight, and confirmed siren controls;
 - bounded same-host recording search and playback path;
+- event **View** actions that find and open the nearest playable recording on
+  the same host and channel;
 - in-plugin per-device forget and privacy reset.
 
 Unsupported controls stay hidden. Snapshot, RTSP, recording, and event
@@ -177,12 +195,15 @@ real mpv isolation checks when a display is available, and security scans.
 
 - Config: `${XDG_CONFIG_HOME:-~/.config}/omarchy-reolink/config.json`
 - Snapshots: `${XDG_CACHE_HOME:-~/.cache}/omarchy-reolink/snapshots/`
+- Saved photos: `$(xdg-user-dir PICTURES)/Reolink/YYYY-MM-DD/`
 - mpv IPC: `$XDG_RUNTIME_DIR/omarchy-reolink/`
 - Passwords: Secret Service attributes `application=omarchy-reolink`,
   `host-id=<id>`, `kind=password`
 
 Before removing the plugin, use **Forget all devices and local camera data**.
 Ordinary Git plugin removal is not assumed to execute cleanup code.
+Saved photos are ordinary user files and are not deleted by **Forget** or
+plugin removal.
 If a keyring backend error interrupts a failed Add rollback, the plugin keeps
 only the non-secret host ID and shows **Retry credential cleanup** until the
 password is confirmed absent.

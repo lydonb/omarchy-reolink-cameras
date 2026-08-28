@@ -73,6 +73,9 @@ tests/shell/test-config.sh
 echo "== Exact request framing =="
 tests/shell/test-framing.sh
 
+echo "== Snapshot export =="
+tests/shell/test-export.sh
+
 if [[ ${REOLINK_PORTABLE_ONLY:-0} != 1 && -n $(command -v quickshell || true) ]]; then
   echo "== QML logic smoke =="
   tests/shell/test-qml.sh

@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export LC_ALL=C
+umask 077
+
+readonly REQUEST_LIMIT=8192
+readonly SNAPSHOT_LIMIT=20971520
+
+fail() {
+  local code="$1" message="$2"
+  jq -cn --arg code "$code" --arg message "$message" \
+    '{ok:false,error:{code:$code,message:$message}}'
+  exit 1
+}
+
+request=""
+trailing=""
+IFS= read -r -n "$((REQUEST_LIMIT + 1))" request \
+  || [[ -n $request ]] || fail "invalid_request" "Snapshot export request is empty."
+((${#request} <= REQUEST_LIMIT)) || fail "request_too_large" "Snapshot export request exceeds 8 KiB."
+if IFS= read -r -t 0.05 -n 1 trailing; then
+  fail "invalid_request" "Snapshot export request must be a single bounded line."
+fi
+jq -e 'type == "object"
+  and (keys | sort) == ["channel","hostId","operation"]
+  and .operation == "export"
+  and (.hostId | type == "string" and test("^host_[A-Za-z0-9_-]{1,96}$"))
+  and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)' \
+  <<<"$request" >/dev/null 2>&1 \
+  || fail "invalid_request" "Snapshot export request contains invalid or unsupported fields."
+
+host_id=$(jq -r '.hostId' <<<"$request")
+channel=$(jq -r '.channel' <<<"$request")
+unset request
+
+validate_real_owned_directory() {
+  local directory="$1" label="$2" require_private="$3" canonical mode permissions
+  [[ ${#directory} -ge 2 && ${#directory} -le 4096 && $directory == /* \
+    && $directory != *//* && $directory != */./* && $directory != */../* \
+    && $directory != */. && $directory != */.. && ! $directory =~ [[:cntrl:]] ]] \
+    || fail "unsafe_directory" "$label path is unsafe."
+  [[ -d $directory && ! -L $directory ]] \
+    || fail "unsafe_directory" "$label must be a real directory."
+  [[ $(stat -c %u -- "$directory") == $(id -u) ]] \
+    || fail "unsafe_directory" "$label must be owned by the current user."
+  canonical=$(realpath -e -- "$directory") \
+    || fail "unsafe_directory" "$label could not be resolved safely."
+  [[ $canonical == "$directory" ]] \
+    || fail "unsafe_directory" "$label may not traverse symbolic links."
+  mode=$(stat -c %a -- "$directory")
+  permissions=$((8#$mode))
+  if [[ $require_private == true ]]; then
+    ((permissions == 0700)) || fail "unsafe_directory" "$label must have mode 0700."
+  else
+    (( (permissions & 0022) == 0 )) \
+      || fail "unsafe_directory" "$label may not be group- or world-writable."
+  fi
+}
+
+prepare_owned_directory() {
+  local directory="$1" label="$2" parent
+  if [[ ! -e $directory && ! -L $directory ]]; then
+    parent=${directory%/*}
+    validate_real_owned_directory "$parent" "$label parent" false
+    mkdir -- "$directory" || fail "export_failed" "$label could not be created."
+    chmod 700 -- "$directory"
+  fi
+  validate_real_owned_directory "$directory" "$label" true
+}
+
+cache_home=${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}
+snapshot_root="$cache_home/omarchy-reolink/snapshots"
+validate_real_owned_directory "$snapshot_root" "Snapshot cache" true
+source="$snapshot_root/${host_id}-ch${channel}.jpg"
+[[ -f $source && ! -L $source ]] || fail "snapshot_missing" "Refresh the camera snapshot before saving it."
+[[ $(stat -c %u -- "$source") == $(id -u) && $(stat -c %a -- "$source") == 600 \
+  && $(stat -c %h -- "$source") == 1 ]] \
+  || fail "unsafe_snapshot" "Cached snapshot metadata is unsafe."
+
+source_size=$(stat -c %s -- "$source")
+((source_size >= 4 && source_size <= SNAPSHOT_LIMIT)) \
+  || fail "unsafe_snapshot" "Cached snapshot size is invalid."
+source_magic=$(od -An -tx1 -N2 -- "$source" | tr -d ' \n')
+[[ $source_magic == ffd8 ]] || fail "unsafe_snapshot" "Cached snapshot is not a JPEG image."
+
+exec {source_fd}<"$source" || fail "snapshot_missing" "Cached snapshot could not be opened."
+source_identity=$(stat -c '%d:%i:%u:%a:%h:%s' -- "$source")
+fd_identity=$(stat -Lc '%d:%i:%u:%a:%h:%s' -- "/proc/self/fd/$source_fd")
+[[ $source_identity == "$fd_identity" ]] \
+  || fail "snapshot_changed" "Snapshot changed while export was starting; try again."
+
+pictures_dir=$(timeout 3s /usr/bin/xdg-user-dir PICTURES 2>/dev/null) \
+  || fail "pictures_unavailable" "The XDG Pictures directory could not be resolved."
+while [[ $pictures_dir != / && $pictures_dir == */ ]]; do pictures_dir=${pictures_dir%/}; done
+[[ -n $pictures_dir && $pictures_dir != / && ${#pictures_dir} -le 4096 \
+  && $pictures_dir == /* && ! $pictures_dir =~ [[:cntrl:]] \
+  && $pictures_dir != *//* && $pictures_dir != */./* && $pictures_dir != */../* \
+  && $pictures_dir != */. && $pictures_dir != */.. ]] \
+  || fail "pictures_unavailable" "The configured Pictures directory is unsafe."
+
+if [[ ! -e $pictures_dir && ! -L $pictures_dir ]]; then
+  pictures_parent=${pictures_dir%/*}
+  validate_real_owned_directory "$pictures_parent" "Pictures parent" false
+  mkdir -- "$pictures_dir" || fail "export_failed" "The Pictures directory could not be created."
+  chmod 700 -- "$pictures_dir"
+fi
+validate_real_owned_directory "$pictures_dir" "Pictures directory" false
+
+export_root="$pictures_dir/Reolink"
+prepare_owned_directory "$export_root" "Reolink Pictures directory"
+date_part=$(date '+%Y-%m-%d')
+time_part=$(date '+%Y-%m-%d_%H-%M-%S.%3N')
+date_dir="$export_root/$date_part"
+prepare_owned_directory "$date_dir" "Dated Reolink Pictures directory"
+
+temporary=$(mktemp --tmpdir="$date_dir" .reolink-export.XXXXXXXX) \
+  || fail "export_failed" "A private export file could not be created."
+trap 'rm -f -- "$temporary"' EXIT
+chmod 600 -- "$temporary"
+suffix=${temporary##*.reolink-export.}
+destination="$date_dir/Reolink-${time_part}-${suffix}.jpg"
+
+timeout --kill-after=1s 15s head -c "$((SNAPSHOT_LIMIT + 1))" <&"$source_fd" >"$temporary" \
+  || fail "export_failed" "Snapshot export timed out or failed."
+exported_size=$(stat -c %s -- "$temporary")
+((exported_size == source_size && exported_size <= SNAPSHOT_LIMIT)) \
+  || fail "snapshot_changed" "Snapshot changed during export; try again."
+[[ $(stat -Lc '%d:%i:%u:%a:%h:%s' -- "/proc/self/fd/$source_fd") == "$fd_identity" \
+  && $(stat -c '%d:%i:%u:%a:%h:%s' -- "$source") == "$source_identity" ]] \
+  || fail "snapshot_changed" "Snapshot changed during export; try again."
+[[ $(od -An -tx1 -N2 -- "$temporary" | tr -d ' \n') == ffd8 ]] \
+  || fail "unsafe_snapshot" "Exported data is not a JPEG image."
+
+ln -- "$temporary" "$destination" \
+  || fail "export_collision" "A unique snapshot filename could not be published."
+rm -f -- "$temporary"
+trap - EXIT
+exec {source_fd}<&-
+jq -cn --arg path "$destination" --argjson bytes "$exported_size" \
+  '{ok:true,path:$path,bytes:$bytes}'

@@ -428,7 +428,7 @@ Panel {
                 width: parent.width
                 spacing: Style.space(6)
                 Button {
-                  width: (parent.width - parent.spacing * 2) / 3
+                  width: (parent.width - parent.spacing) / 2
                   text: "Fluent Live"
                   foreground: root.foreground
                   bordered: true
@@ -437,7 +437,7 @@ Panel {
                   onClicked: if (root.effectiveService) root.effectiveService.launchLive("sub")
                 }
                 Button {
-                  width: (parent.width - parent.spacing * 2) / 3
+                  width: (parent.width - parent.spacing) / 2
                   text: "Clear Live"
                   foreground: root.foreground
                   bordered: true
@@ -445,12 +445,27 @@ Panel {
                     && root.selectedCamera.capabilities.stream.clear
                   onClicked: if (root.effectiveService) root.effectiveService.launchLive("main")
                 }
+              }
+
+              Row {
+                width: parent.width
+                spacing: Style.space(6)
                 Button {
-                  width: (parent.width - parent.spacing * 2) / 3
-                  text: "Snapshot"
+                  width: (parent.width - parent.spacing) / 2
+                  text: "Refresh Snapshot"
                   foreground: root.foreground
                   bordered: true
                   onClicked: if (root.effectiveService) root.effectiveService.requestSnapshot(root.selectedCamera.id)
+                }
+                Button {
+                  width: (parent.width - parent.spacing) / 2
+                  text: root.effectiveService && root.effectiveService.snapshotExportInProgress
+                    ? "Saving…" : "Save Photo"
+                  foreground: root.foreground
+                  bordered: true
+                  enabled: root.selectedCamera && root.selectedCamera.snapshotPath !== ""
+                    && root.effectiveService && !root.effectiveService.snapshotExportInProgress
+                  onClicked: if (root.effectiveService) root.effectiveService.exportSnapshot(root.selectedCamera.id)
                 }
               }
 
@@ -507,9 +522,7 @@ Panel {
                       foreground: root.foreground
                       onClicked: {
                         if (!root.effectiveService) return
-                        root.effectiveService.selectCamera("cam_" + String(eventRow.modelData.hostId).substring(5) + "_" + eventRow.modelData.channel)
-                        root.effectiveService.requestSnapshot(root.effectiveService.selectedCameraId)
-                        root.view = "overview"
+                        if (root.effectiveService.viewEvent(eventRow.modelData)) root.view = "overview"
                       }
                     }
                   }

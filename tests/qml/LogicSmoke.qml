@@ -7,6 +7,8 @@ import "lib/CapabilityNormalizer.js" as Capabilities
 import "lib/EventNormalizer.js" as Events
 import "lib/NotificationCommand.js" as NotificationCommand
 import "lib/RequestQueue.js" as RequestQueue
+import "lib/ReolinkCommands.js" as Commands
+import "lib/Time.js" as Time
 
 ShellRoot {
   FileView {
@@ -100,6 +102,57 @@ ShellRoot {
     ])
     assertTrue(!noStreamCapabilities.stream.fluent && !noStreamCapabilities.stream.clear
       && !noStreamCapabilities.stream.rtspEnabled, "unknown streams were enabled")
+
+    var eventTime = new Date(2026, 7, 28, 16, 1, 30).getTime()
+    var eventRange = Time.aroundRange(eventTime, 300, 300)
+    assertTrue(eventRange.start.hour === 15 && eventRange.start.min === 56
+      && eventRange.end.hour === 16 && eventRange.end.min === 6,
+      "event recording search range was not centered on the event")
+    var midnightRange = Time.aroundRange(new Date(2026, 7, 28, 0, 1, 0).getTime(), 300, 300)
+    assertTrue(midnightRange.start.day === 27 && midnightRange.end.day === 28,
+      "event recording range did not cross midnight safely")
+    var recordingResponse = [{ cmd: "Search", code: 0, value: { SearchResult: { File: [
+      {
+        name: "/mnt/reolink/early.mp4", type: "main",
+        StartTime: { year: 2026, mon: 8, day: 28, hour: 15, min: 58, sec: 0 },
+        EndTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 0, sec: 0 }
+      },
+      {
+        name: "/mnt/reolink/event.mp4", type: "main",
+        StartTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 1, sec: 0 },
+        EndTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 2, sec: 0 }
+      },
+      {
+        name: "unplayable.mp4", type: "main",
+        StartTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 1, sec: 20 },
+        EndTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 1, sec: 40 }
+      }
+    ] } } }]
+    var parsedRecordings = Model.parseRecordings(recordingResponse, endpoint.value.id, 0)
+    assertTrue(parsedRecordings.length === 3
+      && parsedRecordings[1].playbackPath === "/mnt/reolink/event.mp4"
+      && parsedRecordings[1].startMs > 0,
+      "Reolink Search filename was not normalized as a playable recording")
+    var matchingEvent = {
+      hostId: endpoint.value.id, channel: 0, type: "person", timestamp: eventTime
+    }
+    var matchedRecording = Model.recordingForEvent(parsedRecordings, matchingEvent, 300000)
+    assertTrue(matchedRecording && matchedRecording.name === "/mnt/reolink/event.mp4",
+      "containing recording was not selected for the event")
+    assertTrue(Model.recordingForEvent(parsedRecordings, {
+      hostId: "host_other", channel: 0, timestamp: eventTime
+    }, 300000) === null, "event matching crossed host boundaries")
+    assertTrue(Model.recordingForEvent(parsedRecordings, {
+      hostId: endpoint.value.id, channel: 1, timestamp: eventTime
+    }, 300000) === null, "event matching crossed channel boundaries")
+    assertTrue(Model.recordingForEvent(parsedRecordings, {
+      hostId: endpoint.value.id, channel: 0, timestamp: eventTime + 3600000
+    }, 300000) === null, "event matching exceeded its bounded time window")
+    assertTrue(Model.recordingForEvent([parsedRecordings[2]], matchingEvent, 300000) === null,
+      "event matching accepted a non-absolute playback source")
+    var searchBody = Commands.recordingSearch(0, eventRange.start, eventRange.end)
+    assertTrue(JSON.stringify(searchBody).indexOf("eventType") === -1,
+      "recording search sent a nonstandard Reolink event filter")
 
     var markedOffline = Model.markHostOffline([
       { id: "one", hostId: endpoint.value.id, online: true },

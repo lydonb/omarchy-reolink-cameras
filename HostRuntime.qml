@@ -240,20 +240,61 @@ Item {
     if (!ready || !token) return
     var range = Time.todayRange(new Date())
     enqueue("recordings", Commands.apiEnvelope(host, token,
-      Commands.recordingSearch(camera.channel, range.start, range.end, "all")), function(ok, response, message) {
+      Commands.recordingSearch(camera.channel, range.start, range.end)), function(ok, response, message) {
       if (!ok) { root.service.lastError = message; return }
       root.service.recordings = Model.parseRecordings(response, host.id, camera.channel)
     })
   }
 
+  function openEventRecording(event) {
+    if (!event || event.hostId !== host.id) {
+      service.notice = ""
+      service.lastError = "The selected event does not belong to this camera host."
+      return
+    }
+    if (!ready || !token) {
+      service.notice = ""
+      service.lastError = "The event camera is not ready for recording playback."
+      return
+    }
+    if (playerProcess.running) {
+      service.notice = ""
+      service.lastError = "Close the current camera player before opening another event."
+      return
+    }
+    var range = Time.aroundRange(Number(event.timestamp), 300, 300)
+    enqueue("event-recording", Commands.apiEnvelope(host, token,
+      Commands.recordingSearch(Number(event.channel), range.start, range.end)), function(ok, response, message) {
+      root.service.notice = ""
+      if (!ok) { root.service.lastError = message; return }
+      var matches = Model.parseRecordings(response, host.id, Number(event.channel))
+      var recording = Model.recordingForEvent(matches, event, 300000)
+      if (!recording) {
+        root.service.lastError = "No playable recording was found near this event."
+        return
+      }
+      root.playRecording(recording)
+    }, true, "event-recording:" + Number(event.channel), false)
+  }
+
   function playRecording(recording) {
-    if (!recording || !recording.playbackPath || playerProcess.running || !token) return
+    if (!recording || !recording.playbackPath || String(recording.playbackPath).charAt(0) !== "/") {
+      service.lastError = "This recording does not provide a playable local media path."
+      return false
+    }
+    if (playerProcess.running || !token) {
+      service.lastError = playerProcess.running
+        ? "Close the current camera player before opening another recording."
+        : "The camera session is not ready for recording playback."
+      return false
+    }
     playerProcess.input = JSON.stringify({
       kind: "recording", hostId: host.id, address: host.address,
       transport: host.transport, tlsMode: host.tlsMode, port: host.port, token: token,
       playbackPath: String(recording.playbackPath)
     })
     playerProcess.running = true
+    return true
   }
 
   Component.onCompleted: Qt.callLater(login)
