@@ -1,0 +1,299 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export LC_ALL=C
+umask 077
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy NO_PROXY no_proxy SSLKEYLOGFILE
+
+readonly REQUEST_LIMIT=262144
+
+fail() {
+  local code="$1" message="$2"
+  jq -cn --arg code "$code" --arg message "$message" \
+    '{ok:false,error:{code:$code,message:$message}}'
+  exit 1
+}
+
+read_bounded_request() {
+  local trailing=""
+  request=""
+  IFS= read -r -n "$((REQUEST_LIMIT + 1))" request \
+    || [[ -n $request ]] || fail "invalid_request" "Player request is empty."
+  ((${#request} <= REQUEST_LIMIT)) || fail "request_too_large" "Player request exceeds 256 KiB."
+  if IFS= read -r -t 0.05 -n 1 trailing; then
+    fail "invalid_request" "Player request must be a single bounded line."
+  fi
+  jq -e 'type == "object"' <<<"$request" >/dev/null 2>&1 \
+    || fail "invalid_request" "Player request must be exactly one JSON object."
+}
+
+process_state() {
+  local pid="$1" state=""
+  [[ -r /proc/$pid/stat ]] || return 1
+  read -r _ _ state _ <"/proc/$pid/stat" || return 1
+  printf '%s\n' "$state"
+}
+
+terminate_child() {
+  local pid="${1:-}" state=""
+  [[ $pid =~ ^[0-9]+$ ]] && ((pid > 1)) || return 0
+  kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null || true; return 0; }
+  kill -TERM "$pid" 2>/dev/null || true
+  for _ in {1..50}; do
+    state=$(process_state "$pid" 2>/dev/null || true)
+    [[ -z $state || $state == Z ]] && break
+    sleep 0.02
+  done
+  state=$(process_state "$pid" 2>/dev/null || true)
+  [[ -z $state || $state == Z ]] || kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+worker_main() {
+  read_bounded_request
+  local parent_pid run_dir socket status_file kind media_url transport tls_mode
+  local runtime_base runtime_dir status_tmp mpv_pid="" ipc_payload state
+  parent_pid=$(jq -r '.parentPid // 0' <<<"$request")
+  run_dir=$(jq -r '.runDir // ""' <<<"$request")
+  socket=$(jq -r '.socket // ""' <<<"$request")
+  status_file=$(jq -r '.statusFile // ""' <<<"$request")
+  kind=$(jq -r '.kind // ""' <<<"$request")
+  media_url=$(jq -r '.mediaUrl // ""' <<<"$request")
+  transport=$(jq -r '.transport // ""' <<<"$request")
+  tls_mode=$(jq -r '.tlsMode // "verify"' <<<"$request")
+  unset request
+
+  runtime_base=${XDG_RUNTIME_DIR:-}
+  runtime_dir="$runtime_base/omarchy-reolink"
+  [[ $parent_pid =~ ^[0-9]+$ ]] && ((parent_pid > 1)) \
+    || fail "invalid_parent" "Player supervisor parent is invalid."
+  [[ $runtime_base == /* && -d $runtime_base && ! -L $runtime_base ]] \
+    || fail "runtime_unavailable" "XDG_RUNTIME_DIR is unavailable."
+  [[ $run_dir == "$runtime_dir"/player.* && -d $run_dir && ! -L $run_dir ]] \
+    || fail "runtime_unavailable" "Player run directory is invalid."
+  [[ $socket == "$run_dir/mpv.sock" && $status_file == "$run_dir/status.json" ]] \
+    || fail "runtime_unavailable" "Player runtime paths are invalid."
+  [[ $(stat -c %u -- "$run_dir") == $(id -u) && $(stat -c %a -- "$run_dir") == 700 ]] \
+    || fail "runtime_unavailable" "Player run directory must be private."
+  [[ $kind == live || $kind == recording ]] || fail "operation_denied" "Unsupported player operation."
+  [[ ${#media_url} -ge 1 && ${#media_url} -le 16384 && $media_url != *$'\n'* && $media_url != *$'\r'* ]] \
+    || fail "invalid_media" "Player media request is invalid."
+  if [[ $kind == live ]]; then
+    [[ $media_url == rtsp://* ]] || fail "invalid_media" "Live media must use RTSP."
+  else
+    [[ $transport == http || $transport == https ]] || fail "invalid_transport" "Invalid recording transport."
+    [[ $tls_mode == verify || $tls_mode == insecure ]] || fail "invalid_tls_mode" "Invalid recording TLS mode."
+    [[ $media_url == "$transport"://* ]] || fail "invalid_media" "Recording media transport does not match."
+  fi
+
+  status_tmp="$status_file.tmp"
+  cleanup_worker() {
+    trap - EXIT INT TERM
+    terminate_child "$mpv_pid"
+    mpv_pid=""
+    rm -f -- "$socket" "$socket.verified" "$status_file" "$status_tmp"
+    rmdir -- "$run_dir" 2>/dev/null || true
+  }
+  trap cleanup_worker EXIT
+  trap 'exit 143' INT TERM
+
+  # The supervisor checks ownership before launching and owns mpv from its first
+  # instruction. If the QML-owned wrapper dies at any startup point, this worker
+  # remains responsible for terminating mpv and removing the private IPC files.
+  kill -0 "$parent_pid" 2>/dev/null || exit 143
+  local -a mpv_args=(
+    --no-config
+    --load-scripts=no
+    --terminal=no
+    --msg-level=all=no
+    --ytdl=no
+    --osd-level=0
+    --idle=yes
+    --hwdec=auto-safe
+    --force-window=yes
+    --input-ipc-server="$socket"
+    --title='Reolink Camera'
+  )
+  if [[ $kind == recording && $transport == https ]]; then
+    [[ $tls_mode == verify ]] && mpv_args+=(--tls-verify=yes) || mpv_args+=(--tls-verify=no)
+  fi
+  mpv "${mpv_args[@]}" >/dev/null 2>&1 &
+  mpv_pid=$!
+
+  for _ in {1..100}; do
+    kill -0 "$parent_pid" 2>/dev/null || exit 143
+    [[ -S $socket ]] && break
+    state=$(process_state "$mpv_pid" 2>/dev/null || true)
+    [[ -n $state && $state != Z ]] || exit 1
+    sleep 0.02
+  done
+  [[ -S $socket && ! -L $socket ]] || exit 1
+  [[ $(stat -c %u -- "$socket") == $(id -u) ]] || exit 1
+  chmod 600 -- "$socket" || exit 1
+  [[ $(stat -c %a -- "$socket") == 600 ]] || exit 1
+  kill -0 "$parent_pid" 2>/dev/null || exit 143
+
+  ipc_payload=$(printf '%s' "$media_url" | jq -Rsc \
+    '{command:["loadfile",.,"replace"],request_id:1}')
+  unset media_url
+  printf '%s\n' "$ipc_payload" | timeout 3s socat -T 2 -u - "UNIX-CONNECT:$socket" >/dev/null 2>&1 \
+    || exit 1
+  unset ipc_payload
+  jq -cn --argjson pid "$mpv_pid" '{ok:true,pid:$pid}' >"$status_tmp"
+  chmod 600 -- "$status_tmp"
+  mv -f -- "$status_tmp" "$status_file"
+
+  while :; do
+    kill -0 "$parent_pid" 2>/dev/null || exit 143
+    state=$(process_state "$mpv_pid" 2>/dev/null || true)
+    [[ -n $state && $state != Z ]] || break
+    sleep 0.1
+  done
+  wait "$mpv_pid" 2>/dev/null || true
+  mpv_pid=""
+  cleanup_worker
+}
+
+if [[ ${1:-} == --worker ]]; then
+  [[ $# == 1 ]] || fail "invalid_request" "Player worker arguments are invalid."
+  worker_main
+  exit 0
+fi
+[[ $# == 0 ]] || fail "invalid_request" "Player arguments are invalid."
+
+request=""
+read_bounded_request
+
+lookup_password() {
+  local lookup_output lookup_rc
+  set +e
+  lookup_output=$(timeout 20s secret-tool lookup \
+    application omarchy-reolink host-id "$host_id" kind password 2>&1)
+  lookup_rc=$?
+  set -e
+  if [[ $lookup_rc == 0 && -n $lookup_output ]]; then
+    password=$lookup_output
+  elif [[ $lookup_rc == 1 && -z $lookup_output ]]; then
+    unset lookup_output
+    fail "secret_missing" "No password is stored for this host."
+  else
+    unset lookup_output
+    fail "secret_lookup_failed" "The desktop keyring could not retrieve the password."
+  fi
+  unset lookup_output
+}
+
+host_id=$(jq -r '.hostId // ""' <<<"$request")
+kind=$(jq -r '.kind // "live"' <<<"$request")
+[[ $host_id =~ ^host_[A-Za-z0-9_-]{1,96}$ ]] || fail "invalid_host_id" "Invalid host identifier."
+
+runtime_base=${XDG_RUNTIME_DIR:-}
+[[ -n $runtime_base && $runtime_base == /* ]] || fail "runtime_unavailable" "XDG_RUNTIME_DIR is required."
+[[ -d $runtime_base && ! -L $runtime_base ]] || fail "runtime_unavailable" "XDG_RUNTIME_DIR must be a real directory."
+[[ $(stat -c %u -- "$runtime_base") == $(id -u) ]] || fail "runtime_unavailable" "XDG_RUNTIME_DIR has the wrong owner."
+[[ $(stat -c %a -- "$runtime_base") == 700 ]] || fail "runtime_unavailable" "XDG_RUNTIME_DIR must have mode 0700."
+runtime_dir="$runtime_base/omarchy-reolink"
+[[ ! -e $runtime_dir || ! -L $runtime_dir ]] || fail "runtime_unavailable" "Runtime directory may not be a symlink."
+mkdir -p -- "$runtime_dir"
+chmod 700 -- "$runtime_dir"
+[[ $(stat -c %u -- "$runtime_dir") == $(id -u) && $(stat -c %a -- "$runtime_dir") == 700 ]] \
+  || fail "runtime_unavailable" "Runtime directory must be private and owned by the current user."
+run_dir=$(mktemp -d --tmpdir="$runtime_dir" player.XXXXXXXX)
+socket="$run_dir/mpv.sock"
+status_file="$run_dir/status.json"
+worker_pid=""
+
+cleanup_controller() {
+  trap - EXIT INT TERM
+  terminate_child "$worker_pid"
+  worker_pid=""
+  rm -f -- "$socket" "$socket.verified" "$status_file" "$status_file.tmp"
+  rmdir -- "$run_dir" 2>/dev/null || true
+}
+trap cleanup_controller EXIT
+trap 'exit 143' INT TERM
+
+case "$kind" in
+  live)
+    address=$(jq -r '.address // ""' <<<"$request")
+    username=$(jq -r '.username // ""' <<<"$request")
+    rtsp_port=$(jq -r '.rtspPort // 554' <<<"$request")
+    channel=$(jq -r '.channel // -1' <<<"$request")
+    stream=$(jq -r '.stream // "sub"' <<<"$request")
+    [[ ${#address} -le 253 && $address =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+      || fail "invalid_address" "Invalid RTSP host."
+    [[ ${#username} -ge 1 && ${#username} -le 64 && $username =~ ^[A-Za-z0-9._@+-]+$ ]] \
+      || fail "invalid_username" "Invalid local device username."
+    [[ $rtsp_port =~ ^[0-9]+$ ]] && ((rtsp_port >= 1 && rtsp_port <= 65535)) \
+      || fail "invalid_port" "RTSP port must be between 1 and 65535."
+    [[ $channel =~ ^[0-9]+$ ]] && ((channel <= 63)) \
+      || fail "invalid_channel" "Channel must be between 0 and 63."
+    [[ $stream == sub || $stream == main ]] || fail "invalid_stream" "Stream must be sub or main."
+    password=""
+    lookup_password
+    encoded_user=$(printf '%s' "$username" | jq -Rsr @uri)
+    encoded_password=$(printf '%s' "$password" | jq -Rsr @uri)
+    unset password
+    printf -v rtsp_channel '%02d' "$((channel + 1))"
+    media_url="rtsp://${encoded_user}:${encoded_password}@${address}:${rtsp_port}/Preview_${rtsp_channel}_${stream}"
+    unset encoded_password
+    transport="rtsp"
+    tls_mode="verify"
+    ;;
+
+  recording)
+    address=$(jq -r '.address // ""' <<<"$request")
+    transport=$(jq -r '.transport // ""' <<<"$request")
+    tls_mode=$(jq -r '.tlsMode // "verify"' <<<"$request")
+    port=$(jq -r '.port // 0' <<<"$request")
+    token=$(jq -r '.token // ""' <<<"$request")
+    playback_path=$(jq -r '.playbackPath // ""' <<<"$request")
+    [[ ${#address} -le 253 && $address =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+      || fail "invalid_address" "Invalid configured recording host."
+    [[ $transport == http || $transport == https ]] || fail "invalid_transport" "Invalid recording transport."
+    [[ $tls_mode == verify || $tls_mode == insecure ]] || fail "invalid_tls_mode" "Invalid recording TLS mode."
+    [[ $port =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)) \
+      || fail "invalid_port" "Recording port must be between 1 and 65535."
+    [[ ${#token} -ge 1 && ${#token} -le 256 && $token =~ ^[A-Za-z0-9._~-]+$ ]] \
+      || fail "invalid_token" "Invalid recording session token."
+    [[ ${#playback_path} -ge 1 && ${#playback_path} -le 4096 && $playback_path == /* \
+      && $playback_path != *://* && $playback_path != *\\* && $playback_path != *\#* \
+      && $playback_path != *$'\n'* && $playback_path != *$'\r'* ]] \
+      || fail "invalid_playback_path" "Recording path is invalid."
+    encoded_path=$(printf '%s' "$playback_path" | jq -Rsr @uri)
+    media_url="${transport}://${address}:${port}/cgi-bin/api.cgi?cmd=Playback&source=${encoded_path}&token=${token}"
+    unset token encoded_path playback_path
+    ;;
+
+  *) fail "operation_denied" "Unsupported player operation." ;;
+esac
+unset request
+
+worker_request=$(jq -cn \
+  --argjson parentPid "$$" --arg runDir "$run_dir" --arg socket "$socket" \
+  --arg statusFile "$status_file" --arg kind "$kind" --arg mediaUrl "$media_url" \
+  --arg transport "$transport" --arg tlsMode "$tls_mode" \
+  '{parentPid:$parentPid,runDir:$runDir,socket:$socket,statusFile:$statusFile,
+    kind:$kind,mediaUrl:$mediaUrl,transport:$transport,tlsMode:$tlsMode}')
+unset media_url
+printf '%s\n' "$worker_request" | /usr/bin/bash "$0" --worker >/dev/null 2>&1 &
+worker_pid=$!
+unset worker_request
+
+for _ in {1..150}; do
+  [[ -s $status_file ]] && break
+  state=$(process_state "$worker_pid" 2>/dev/null || true)
+  [[ -n $state && $state != Z ]] || fail "player_failed" "mpv exited before private IPC was ready."
+  sleep 0.02
+done
+[[ -f $status_file && ! -L $status_file && $(stat -c %a -- "$status_file") == 600 ]] \
+  || fail "player_timeout" "mpv did not create private IPC in time."
+status=$(head -c 4097 -- "$status_file")
+((${#status} <= 4096)) || fail "player_failed" "Player status exceeded its bound."
+jq -e '.ok == true and (.pid | type == "number") and .pid > 1' <<<"$status" >/dev/null 2>&1 \
+  || fail "player_failed" "Player supervisor returned invalid status."
+printf '%s\n' "$status"
+rm -f -- "$status_file"
+
+wait "$worker_pid"
+worker_pid=""

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+socket=""
+tls_verify=""
+for argument in "$@"; do
+  case "$argument" in
+    --input-ipc-server=*) socket=${argument#*=} ;;
+    --tls-verify=*) tls_verify=${argument#*=} ;;
+    *://*) exit 41 ;;
+  esac
+done
+[[ -n $socket && $socket == /* ]]
+verified_marker="$socket.verified"
+cleanup() {
+  rm -f -- "$verified_marker"
+}
+trap cleanup EXIT
+if [[ ${REOLINK_FAKE_IGNORE_TERM:-0} == 1 ]]; then
+  trap '' INT TERM
+else
+  trap 'exit 143' INT TERM
+fi
+
+sleep 0.2
+payload=$(timeout 5s socat -T 4 -u "UNIX-LISTEN:$socket,mode=600,unlink-close=0" -)
+password=$(printf '%s' 'SUPER_SECRET_' 'REOLINK_PASSWORD')
+token=$(printf '%s' 'SUPER_SECRET_' 'REOLINK_TOKEN')
+media_url=$(jq -er 'select(.command[0] == "loadfile" and .command[2] == "replace") | .command[1]' <<<"$payload")
+if [[ $media_url == rtsp://* ]]; then
+  [[ $media_url == *"$password"* && -z $tls_verify ]]
+elif [[ $media_url == https://* ]]; then
+  expected_url="https://127.0.0.1:443/cgi-bin/api.cgi?cmd=Playback&source=%2Fmnt%2Frecordings%2Ffront-door.mp4&token=$token"
+  [[ $media_url == "$expected_url" && $tls_verify == yes ]]
+  unset expected_url
+else
+  exit 42
+fi
+unset payload media_url password token tls_verify
+: >"$verified_marker"
+chmod 600 -- "$verified_marker"
+sleep 30

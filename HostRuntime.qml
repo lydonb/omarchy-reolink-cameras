@@ -1,0 +1,354 @@
+pragma ComponentBehavior: Bound
+
+import QtQuick
+import Quickshell.Io
+import "lib/ReolinkCommands.js" as Commands
+import "lib/ReolinkModel.js" as Model
+import "lib/CapabilityNormalizer.js" as Capabilities
+import "lib/EventNormalizer.js" as Events
+import "lib/RequestQueue.js" as RequestQueue
+import "lib/Time.js" as Time
+
+Item {
+  id: root
+
+  required property var host
+  required property var service
+  required property string helperPath
+  required property string playerPath
+
+  property string runtimeState: "starting"
+  property string token: ""
+  property double tokenExpiresAt: 0
+  property string errorMessage: ""
+  property var channels: []
+  property var capabilities: ({})
+  property var edgeState: ({})
+  property var requestQueue: []
+  property var activeRequest: null
+  property string activeInput: ""
+  property bool authenticating: false
+  property int backoffIndex: 0
+  property int ptzChannel: -1
+  property bool eventsEnabled: true
+
+  readonly property var backoffIntervals: [2000, 5000, 10000, 30000, 60000]
+  readonly property bool ready: runtimeState === "online" || runtimeState === "degraded"
+
+  function enqueue(kind, envelope, callback, priority, coalesceKey, safetyOff) {
+    var request = {
+      kind: kind,
+      input: JSON.stringify(envelope),
+      callback: callback,
+      coalesceKey: coalesceKey || "",
+      safetyOff: safetyOff === true
+    }
+    requestQueue = RequestQueue.insert(requestQueue, request, priority, 32)
+    drain()
+  }
+
+  function drain() {
+    if (httpProcess.running || activeRequest || !requestQueue.length || !helperPath) return
+    var queue = requestQueue.slice()
+    activeRequest = queue.shift()
+    requestQueue = queue
+    activeInput = activeRequest.input
+    activeRequest.input = ""
+    httpProcess.running = true
+  }
+
+  function login() {
+    if (authenticating || httpProcess.running) return
+    authenticating = true
+    runtimeState = "authenticating"
+    service.setHostState(host.id, runtimeState, "Signing in")
+    enqueue("login", Commands.loginEnvelope(host), function(ok, response, message) {
+      root.authenticating = false
+      if (!ok) { root.failHost(message || "Authentication failed."); return }
+      var session = Model.loginSession(response, Date.now())
+      if (!session.ok) { root.failHost(session.error); return }
+      root.token = session.token
+      root.tokenExpiresAt = session.expiresAt
+      root.backoffIndex = 0
+      root.bootstrap()
+    }, true)
+  }
+
+  function ensureSession(callback) {
+    if (token && Date.now() + 60000 < tokenExpiresAt) { callback(true); return }
+    if (authenticating) { callback(false); return }
+    login()
+    callback(false)
+  }
+
+  function bootstrap() {
+    if (!token) { login(); return }
+    runtimeState = "discovering"
+    service.setHostState(host.id, runtimeState, "Discovering channels and capabilities")
+    enqueue("bootstrap", Commands.apiEnvelope(host, token, Commands.bootstrap()), function(ok, response, message) {
+      if (!ok) { root.handleApiFailure(message); return }
+      var info = Capabilities.deviceInfo(response)
+      root.capabilities = Capabilities.normalize(response)
+      root.channels = Capabilities.channels(response, host.displayName)
+      var cameras = Model.logicalCameras(host, root.channels, root.capabilities, info)
+      root.service.updateHostCameras(host.id, cameras)
+      root.runtimeState = "online"
+      root.errorMessage = ""
+      root.backoffIndex = 0
+      root.service.setHostState(host.id, root.runtimeState, "")
+      if (root.capabilities.ptz.presets) root.discoverPresets()
+      if (root.eventsEnabled) eventTimer.restart()
+      statusTimer.restart()
+      if (root.service.previewActive) root.refreshSelectedSnapshot()
+    })
+  }
+
+  function refresh() {
+    eventsEnabled = true
+    if (!token || Date.now() + 60000 >= tokenExpiresAt) login()
+    else bootstrap()
+  }
+
+  function failHost(message) {
+    runtimeState = "offline"
+    errorMessage = String(message || "Camera is offline.")
+    service.setHostState(host.id, runtimeState, errorMessage)
+    service.markHostOffline(host.id)
+    var delayIndex = Math.min(backoffIndex, backoffIntervals.length - 1)
+    retryTimer.interval = backoffIntervals[delayIndex]
+    backoffIndex = Math.min(backoffIndex + 1, backoffIntervals.length - 1)
+    retryTimer.restart()
+  }
+
+  function handleApiFailure(message) {
+    var text = String(message || "Camera request failed.")
+    if (/auth|token|login/i.test(text)) {
+      token = ""
+      tokenExpiresAt = 0
+    }
+    failHost(text)
+  }
+
+  function requestEvents() {
+    if (!eventsEnabled || !ready || httpProcess.running || activeRequest || requestQueue.length) return
+    if (!token || Date.now() + 60000 >= tokenExpiresAt) { login(); return }
+    var channelNumbers = []
+    for (var index = 0; index < channels.length; index += 1) channelNumbers.push(channels[index].channel)
+    enqueue("events", Commands.apiEnvelope(host, token, Commands.eventBatch(channelNumbers)), function(ok, response, message) {
+      if (!ok) {
+        var failure = String(message || "Event polling failed.")
+        if (/auth|token|login|network|timed out/i.test(failure)) root.handleApiFailure(failure)
+        else {
+          root.eventsEnabled = false
+          eventTimer.stop()
+          root.runtimeState = "degraded"
+          root.errorMessage = failure
+          root.service.setHostState(host.id, root.runtimeState, failure)
+        }
+        return
+      }
+      var active = Events.activeStates(response, host.id)
+      var edges = Events.risingEdges(root.edgeState, active, Date.now(), 10000)
+      root.edgeState = edges.state
+      root.service.publishEvents(edges.events)
+      if (root.runtimeState !== "online") {
+        root.runtimeState = "online"
+        root.service.setHostState(host.id, root.runtimeState, "")
+      }
+    })
+  }
+
+  function refreshSelectedSnapshot() {
+    var camera = service.selectedCamera
+    if (camera && camera.hostId === host.id) requestSnapshot(camera)
+  }
+
+  function requestSnapshot(camera) {
+    if (!camera || camera.hostId !== host.id || !ready || httpProcess.running || !token) return
+    enqueue("snapshot", Commands.snapshotEnvelope(host, token, camera.channel), function(ok, response, message) {
+      if (!ok) { root.errorMessage = message; return }
+      if (response && response.ok && response.path)
+        root.service.updateCamera(camera.id, { snapshotPath: String(response.path), snapshotUpdatedAt: Date.now() })
+    })
+  }
+
+  function sendControl(kind, body, callback, coalesceKey, safetyOff) {
+    if (!ready || !token) { if (callback) callback(false); return }
+    enqueue(kind, Commands.apiEnvelope(host, token, body), function(ok, response, message) {
+      if (!ok) root.service.lastError = message
+      if (callback) callback(ok, response)
+    }, true, coalesceKey, safetyOff)
+  }
+
+  function startPtz(camera, direction) {
+    if (!ready || !token || ptzProcess.running || ptzStopProcess.running) return
+    ptzChannel = camera.channel
+    ptzProcess.canceledSafely = false
+    ptzProcess.input = JSON.stringify(Commands.ptzPulseEnvelope(host, token, camera.channel, direction, 1200))
+    ptzProcess.running = true
+  }
+
+  function stopPtz(camera) {
+    var channel = camera ? camera.channel : ptzChannel
+    ptzChannel = -1
+    if (ptzProcess.running) {
+      ptzProcess.canceledSafely = true
+      ptzProcess.running = false
+    }
+    if (channel < 0 || !token || ptzStopProcess.running) return
+    ptzStopProcess.input = JSON.stringify(Commands.apiEnvelope(host, token, Commands.ptz(channel, "Stop", 24, 0)))
+    ptzStopProcess.running = true
+  }
+
+  function gotoPreset(camera, presetId) {
+    sendControl("ptz-preset", Commands.ptz(camera.channel, "ToPos", 24, presetId), null,
+      "ptz-preset:" + camera.channel, false)
+  }
+
+  function discoverPresets() {
+    var channelNumbers = []
+    for (var index = 0; index < channels.length; index += 1) channelNumbers.push(channels[index].channel)
+    enqueue("presets", Commands.apiEnvelope(host, token, Commands.presetBatch(channelNumbers)), function(ok, response, message) {
+      if (!ok) return
+      for (var cameraIndex = 0; cameraIndex < root.channels.length; cameraIndex += 1) {
+        var channel = root.channels[cameraIndex].channel
+        root.service.updateCamera(Model.cameraId(host.id, channel), {
+          presets: Capabilities.presets(response, channel, cameraIndex)
+        })
+      }
+    })
+  }
+
+  function changeZoom(camera, direction) {
+    sendControl("zoom", Commands.zoom(camera.channel, direction), null,
+      "zoom:" + camera.channel, false)
+  }
+
+  function setSpotlight(camera, enabled) {
+    sendControl(enabled ? "spotlight-on" : "spotlight-off",
+      Commands.spotlight(camera.channel, enabled), null,
+      "spotlight:" + camera.channel, !enabled)
+  }
+
+  function setSiren(camera, enabled) {
+    sendControl(enabled ? "siren-on" : "siren-off",
+      Commands.siren(camera.channel, enabled), null,
+      "siren:" + camera.channel, !enabled)
+  }
+
+  function searchRecordings(camera) {
+    if (!ready || !token) return
+    var range = Time.todayRange(new Date())
+    enqueue("recordings", Commands.apiEnvelope(host, token,
+      Commands.recordingSearch(camera.channel, range.start, range.end, "all")), function(ok, response, message) {
+      if (!ok) { root.service.lastError = message; return }
+      root.service.recordings = Model.parseRecordings(response, host.id, camera.channel)
+    })
+  }
+
+  function playRecording(recording) {
+    if (!recording || !recording.playbackPath || playerProcess.running || !token) return
+    playerProcess.input = JSON.stringify({
+      kind: "recording", hostId: host.id, address: host.address,
+      transport: host.transport, tlsMode: host.tlsMode, port: host.port, token: token,
+      playbackPath: String(recording.playbackPath)
+    })
+    playerProcess.running = true
+  }
+
+  Component.onCompleted: Qt.callLater(login)
+  Component.onDestruction: {
+    eventTimer.stop()
+    statusTimer.stop()
+    retryTimer.stop()
+    if (ptzProcess.running) {
+      ptzProcess.canceledSafely = true
+      ptzProcess.running = false
+    }
+    ptzChannel = -1
+    httpProcess.running = false
+    playerProcess.running = false
+    token = ""
+  }
+
+  Process {
+    id: httpProcess
+    command: ["/usr/bin/bash", root.helperPath]
+    stdinEnabled: true
+    stdout: StdioCollector { id: httpOutput; waitForEnd: true }
+    onStarted: { write(root.activeInput + "\n"); root.activeInput = "" }
+    onExited: function(exitCode, exitStatus) {
+      var request = root.activeRequest
+      root.activeRequest = null
+      var response = null
+      try { response = JSON.parse(String(httpOutput.text || "")) } catch (error) {}
+      var ok = exitStatus === 0 && exitCode === 0 && response !== null
+      var message = ok ? "" : response && response.error
+        ? String(response.error.message) : "Camera request failed."
+      if (request && request.callback) request.callback(ok, response, message)
+      Qt.callLater(root.drain)
+    }
+  }
+
+  Process {
+    id: playerProcess
+    property string input: ""
+    command: ["/usr/bin/bash", root.playerPath]
+    stdinEnabled: true
+    stdout: StdioCollector { id: playerOutput; waitForEnd: true }
+    onStarted: { write(input + "\n"); input = "" }
+    onExited: function(exitCode, exitStatus) {
+      if (exitStatus === 0 && exitCode === 0) return
+      var response = null
+      try { response = JSON.parse(String(playerOutput.text || "")) } catch (error) {}
+      root.service.lastError = response && response.error
+        ? String(response.error.message) : "Could not play recording."
+    }
+  }
+
+  Process {
+    id: ptzProcess
+    property string input: ""
+    property bool canceledSafely: false
+    command: ["/usr/bin/bash", root.helperPath]
+    stdinEnabled: true
+    stdout: StdioCollector { id: ptzOutput; waitForEnd: true }
+    onStarted: { write(input + "\n"); input = "" }
+    onExited: function(exitCode, exitStatus) {
+      root.ptzChannel = -1
+      if (canceledSafely) { canceledSafely = false; return }
+      if (exitStatus === 0 && exitCode === 0) return
+      var parsed = null
+      try { parsed = JSON.parse(String(ptzOutput.text || "")) } catch (error) {}
+      root.service.lastError = parsed && parsed.error
+        ? String(parsed.error.message) : "PTZ safety operation failed."
+    }
+  }
+
+  Process {
+    id: ptzStopProcess
+    property string input: ""
+    command: ["/usr/bin/bash", root.helperPath]
+    stdinEnabled: true
+    stdout: StdioCollector { id: ptzStopOutput; waitForEnd: true }
+    onStarted: { write(input + "\n"); input = "" }
+    onExited: function(exitCode, exitStatus) {
+      if (exitStatus === 0 && exitCode === 0) return
+      var parsed = null
+      try { parsed = JSON.parse(String(ptzStopOutput.text || "")) } catch (error) {}
+      root.service.lastError = parsed && parsed.error
+        ? String(parsed.error.message) : "Could not stop PTZ movement."
+    }
+  }
+
+  Timer { id: eventTimer; interval: 2500; repeat: true; onTriggered: root.requestEvents() }
+  Timer { id: statusTimer; interval: 30000; repeat: true; onTriggered: root.bootstrap() }
+  Timer {
+    id: snapshotTimer
+    interval: 5000
+    repeat: true
+    running: root.service.previewActive && root.ready
+    onTriggered: root.refreshSelectedSnapshot()
+  }
+  Timer { id: retryTimer; repeat: false; onTriggered: root.login() }
+}

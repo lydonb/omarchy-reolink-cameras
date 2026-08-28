@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+request_line=""
+IFS= read -r request_line || exit 0
+request_line=${request_line%$'\r'}
+content_length=0
+while IFS= read -r header; do
+  header=${header%$'\r'}
+  [[ -n $header ]] || break
+  if [[ $header == [Cc]ontent-[Ll]ength:* ]]; then
+    content_length=${header#*:}
+    content_length=${content_length//[[:space:]]/}
+  fi
+done
+
+body=""
+if [[ $content_length =~ ^[0-9]+$ ]] && ((content_length > 0)); then
+  body=$(dd bs=1 count="$content_length" status=none 2>/dev/null || true)
+fi
+
+target=${request_line#* }
+target=${target%% *}
+
+if [[ -n ${FAKE_REDIRECT_RECEIVER_TRACE:-} ]]; then
+  printf '%s\n' 'request-received' >>"$FAKE_REDIRECT_RECEIVER_TRACE"
+fi
+
+expected_token=$(printf '%s' 'SUPER_SECRET_' 'REOLINK_TOKEN')
+if [[ $target == *"token=$expected_token"* && -n ${FAKE_CAMERA_TRACE:-} ]]; then
+  printf '%s\n' 'token-received' >>"$FAKE_CAMERA_TRACE"
+fi
+unset expected_token
+
+respond() {
+  local content_type="$1" payload="$2"
+  printf 'HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' \
+    "$content_type" "${#payload}"
+  printf '%s' "$payload"
+}
+
+respond_status() {
+  local status="$1" content_type="$2" payload="$3"
+  printf 'HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' \
+    "$status" "$content_type" "${#payload}"
+  printf '%s' "$payload"
+}
+
+respond_redirect() {
+  local location="$1" payload='[{"cmd":"GetAiState","code":0,"value":{}}]'
+  printf 'HTTP/1.1 302 Found\r\nLocation: %s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' \
+    "$location" "${#payload}"
+  printf '%s' "$payload"
+}
+
+if [[ $target == *cmd=Snap* ]]; then
+  jpeg=$'\377\330FAKE_REOLINK_JPEG\377\331'
+  respond 'image/jpeg' "$jpeg"
+elif [[ $target == *cmd=Login* ]]; then
+  expected_password=$(printf '%s' 'SUPER_SECRET_' 'REOLINK_PASSWORD')
+  [[ $body == *'"cmd":"Login"'* && $body == *"$expected_password"* ]] || exit 1
+  [[ -z ${FAKE_CAMERA_TRACE:-} ]] || printf '%s\n' 'password-received' >>"$FAKE_CAMERA_TRACE"
+  unset expected_password
+  sleep 1
+  if [[ $body == *'"userName":"wrong"'* ]]; then
+    respond 'application/json' '[{"cmd":"Login","code":1,"error":{"rspCode":-6,"detail":"login failed"}}]'
+  elif [[ $body == *'"userName":"malformed"'* ]]; then
+    respond 'application/json' '[{"cmd":"Login","code":0,"value":{"Token":{}}}]'
+  else
+    respond 'application/json' '[{"cmd":"Login","code":0,"value":{"Token":{"name":"SAFE_SESSION_TOKEN","leaseTime":3600}}}]'
+  fi
+elif [[ $target == *cmd=GetEvents* ]]; then
+  respond 'application/json' '[{"cmd":"GetEvents","code":0,"value":{"channel":0,"md":{"support":1,"alarm_state":1},"ai":{"people":{"support":1,"alarm_state":1}}}}]'
+elif [[ $target == *cmd=GetAiState* ]]; then
+  respond_redirect "${FAKE_REDIRECT_URL:-http://127.0.0.1:9/cross-host}"
+elif [[ $target == *cmd=GetMdState* ]]; then
+  respond 'application/json' '[{"cmd":"GetMdState","code":1,"error":{"rspCode":-6,"detail":"login required"}}]'
+elif [[ $target == *cmd=PtzCtrl* ]]; then
+  ptz_op=$(jq -r '.[0].param.op // "missing"' <<<"$body")
+  [[ $ptz_op != Up ]] || sleep 0.3
+  if [[ -n ${FAKE_CAMERA_TRACE:-} ]]; then
+    printf '%s\n' "$ptz_op" >>"$FAKE_CAMERA_TRACE"
+  fi
+  [[ $ptz_op != Down ]] || sleep 3
+  unset ptz_op
+  respond 'application/json' '[{"cmd":"PtzCtrl","code":0,"value":{}}]'
+elif [[ $target == *cmd=GetChnTypeInfo* ]]; then
+  oversized=1048577
+  printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n' "$oversized"
+  head -c "$oversized" /dev/zero | tr '\0' 'x'
+elif [[ $target == *cmd=GetAudioAlarmV20* ]]; then
+  sleep 11
+  respond 'application/json' '[{"cmd":"GetAudioAlarmV20","code":0,"value":{}}]'
+elif [[ $target == *cmd=GetAudioAlarm* ]]; then
+  respond 'application/json' 'not-json'
+elif [[ $target == *cmd=GetWhiteLed* ]]; then
+  respond_status '500 Internal Server Error' 'application/json' '[{"cmd":"GetWhiteLed","code":1}]'
+elif [[ $target == *cmd=GetPtzPreset* ]]; then
+  respond 'application/json' '[{"cmd":"GetPtzPreset","value":{}}]'
+elif [[ $target == *cmd=GetDevInfo* ]]; then
+  [[ $body == *'testDelay'* ]] && sleep 1
+  respond 'application/json' '[{"cmd":"GetDevInfo","code":0,"value":{"DevInfo":{"model":"RLC-Fixture","firmVer":"v1"}}},{"cmd":"GetAbility","code":0,"value":{"Ability":{"ptzCtrl":{"permit":1},"whiteLed":{"ver":1},"audioAlarm":{"ver":1},"search":{"ver":1},"supportAi":{"people":{"ver":1},"vehicle":{"ver":1}}}}},{"cmd":"GetChannelstatus","code":0,"value":{"status":[{"channel":0,"name":"Front Door","online":1}]}},{"cmd":"GetNetPort","code":0,"value":{"NetPort":{"rtspPort":{"enable":1}}}},{"cmd":"GetEnc","code":0,"value":{"Enc":{"mainStream":{"vType":"h265"},"subStream":{"vType":"h264"}}}}]'
+else
+  respond 'application/json' '[{"cmd":"Unknown","code":1,"error":{"rspCode":-9}}]'
+fi

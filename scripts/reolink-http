@@ -1,0 +1,430 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export LC_ALL=C
+umask 077
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy NO_PROXY no_proxy SSLKEYLOGFILE
+
+readonly REQUEST_LIMIT=262144
+readonly JSON_LIMIT=1048576
+readonly RECORDING_LIMIT=2097152
+readonly SNAPSHOT_LIMIT=20971520
+
+fail() {
+  local code="$1" message="$2"
+  jq -cn --arg code "$code" --arg message "$message" \
+    '{ok:false,error:{code:$code,message:$message}}'
+  exit 1
+}
+
+read_request() {
+  local request_data="" trailing=""
+  IFS= read -r -n "$((REQUEST_LIMIT + 1))" request_data \
+    || [[ -n $request_data ]] || fail "invalid_request" "Request envelope is empty."
+  ((${#request_data} <= REQUEST_LIMIT)) || fail "request_too_large" "Request envelope exceeds 256 KiB."
+  if IFS= read -r -t 0.05 -n 1 trailing; then
+    fail "invalid_request" "Request envelope must be a single bounded line."
+  fi
+  jq -e 'type == "object"' <<<"$request_data" >/dev/null 2>&1 \
+    || fail "invalid_request" "Request envelope must be exactly one JSON object."
+  request=$request_data
+}
+
+valid_host_id() {
+  [[ $1 =~ ^host_[A-Za-z0-9_-]{1,96}$ ]]
+}
+
+valid_address() {
+  local value="$1"
+  [[ ${#value} -ge 1 && ${#value} -le 253 ]] || return 1
+  [[ $value =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || return 1
+  [[ $value != *..* && $value != *.-* && $value != *-. ]]
+}
+
+valid_username() {
+  [[ ${#1} -ge 1 && ${#1} -le 64 && $1 =~ ^[A-Za-z0-9._@+-]+$ ]]
+}
+
+valid_token() {
+  [[ ${#1} -ge 1 && ${#1} -le 256 && $1 =~ ^[A-Za-z0-9._~-]+$ ]]
+}
+
+monotonic_ms() {
+  local uptime_value whole fraction
+  read -r uptime_value _ </proc/uptime \
+    || fail "clock_unavailable" "The monotonic safety clock is unavailable."
+  whole=${uptime_value%%.*}
+  fraction=${uptime_value#*.}
+  fraction="${fraction}000"
+  fraction=${fraction:0:3}
+  printf '%d\n' "$((10#$whole * 1000 + 10#$fraction))"
+}
+
+command_allowed() {
+  case "$1" in
+    Logout|GetDevInfo|GetAbility|GetChannelstatus|GetChnTypeInfo|GetNetPort|GetEnc|Snap|GetEvents|GetAiState|GetMdState|PtzCtrl|GetPtzPreset|StartZoomFocus|GetWhiteLed|SetWhiteLed|GetAudioAlarm|SetAudioAlarm|GetAudioAlarmV20|SetAudioAlarmV20|Search|Playback|Download|NvrDownload) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+curl_json() {
+  local url="$1" body="$2" cap="$3" tls_mode="$4" max_time="${5:-10}"
+  local curl_config captured response status rc bytes marker
+  local -a curl_args=(
+    -q --silent --show-error --fail-with-body
+    --noproxy '*' --proto '=http,https' --proto-redir '=http,https'
+    --connect-timeout 3 --max-time "$max_time"
+    --max-filesize "$cap"
+    --request POST --header 'Content-Type: application/json'
+    --config /dev/fd/3 --data-binary @- --write-out $'\n__OMARCHY_HTTP_STATUS__%{http_code}'
+  )
+  [[ $tls_mode == insecure ]] && curl_args+=(--insecure)
+
+  # The URL can contain a session token. Supplying it through fd 3 keeps it
+  # out of curl's argv and environment. The body travels on stdin.
+  curl_config="url = \"$url\""
+  set +e
+  captured="$(printf '%s' "$body" | curl "${curl_args[@]}" 3<<<"$curl_config" 2>/dev/null)"
+  rc=$?
+  set -e
+  marker=$'\n__OMARCHY_HTTP_STATUS__'
+  status=${captured##*"$marker"}
+  response=${captured%"$marker"*}
+  bytes=${#response}
+
+  ((bytes <= cap)) && ((rc != 63)) \
+    || fail "response_too_large" "Camera response exceeded the operation limit."
+  [[ $status == 000 || $status =~ ^2[0-9][0-9]$ ]] \
+    || fail "http_error" "Camera returned a non-success HTTP status."
+  case "$rc" in
+    0) ;;
+    28) fail "timeout" "Camera request timed out." ;;
+    35|51|53|58|59|60|64|66|77|80|82|83|90|91)
+      fail "tls_error" "Camera TLS verification or negotiation failed." ;;
+    *) fail "network_error" "Camera network request failed." ;;
+  esac
+  jq -e 'type == "array" or type == "object"' <<<"$response" >/dev/null 2>&1 \
+    || fail "invalid_response" "Camera returned invalid JSON."
+  printf '%s\n' "$response"
+}
+
+curl_snapshot() {
+  local url="$1" tls_mode="$2" destination="$3"
+  local directory temporary curl_config rc size magic status cache_root
+  local -a curl_args=(
+    -q --silent --show-error --fail-with-body
+    --noproxy '*' --proto '=http,https' --proto-redir '=http,https'
+    --connect-timeout 3 --max-time 15
+    --max-filesize "$SNAPSHOT_LIMIT"
+    --config /dev/fd/3
+  )
+  [[ $tls_mode == insecure ]] && curl_args+=(--insecure)
+
+  directory=${destination%/*}
+  cache_root=${directory%/snapshots}
+  prepare_base_dir "${cache_root%/omarchy-reolink}" "cache base"
+  prepare_private_dir "$cache_root" "cache directory"
+  prepare_private_dir "$directory" "snapshot directory"
+  temporary="$(mktemp --tmpdir="$directory" .snapshot.XXXXXXXX)"
+  trap 'rm -f -- "$temporary"' EXIT
+  curl_config="url = \"$url\""
+
+  set +e
+  status=$(curl "${curl_args[@]}" --output "$temporary" --write-out '%{http_code}' \
+    3<<<"$curl_config" 2>/dev/null)
+  rc=$?
+  set -e
+  size=$(stat -c %s -- "$temporary")
+  ((size <= SNAPSHOT_LIMIT)) || fail "snapshot_too_large" "Snapshot exceeded 20 MiB."
+  ((rc == 0)) || fail "network_error" "Snapshot request failed or timed out."
+  [[ $status =~ ^2[0-9][0-9]$ ]] || fail "http_error" "Camera returned a non-success HTTP status."
+  ((size >= 4)) || fail "invalid_snapshot" "Camera returned an empty snapshot."
+  magic=$(od -An -tx1 -N2 -- "$temporary" | tr -d ' \n')
+  [[ $magic == ffd8 ]] || fail "invalid_snapshot" "Camera response was not a JPEG image."
+
+  chmod 600 -- "$temporary"
+  mv -f -- "$temporary" "$destination"
+  trap - EXIT
+  jq -cn --arg path "$destination" --argjson bytes "$size" \
+    '{ok:true,path:$path,bytes:$bytes}'
+}
+
+prepare_base_dir() {
+  local directory="$1" label="$2" parent
+  [[ $directory == /* ]] || fail "unsafe_directory" "$label must use an absolute path."
+  if [[ ! -e $directory && ! -L $directory ]]; then
+    parent=${directory%/*}
+    [[ -d $parent && ! -L $parent && $(stat -c %u -- "$parent") == $(id -u) ]] \
+      || fail "unsafe_directory" "$label parent must be a real owned directory."
+    mkdir -- "$directory"
+  fi
+  [[ -d $directory && ! -L $directory && $(stat -c %u -- "$directory") == $(id -u) ]] \
+    || fail "unsafe_directory" "$label must be a real owned directory."
+}
+
+prepare_private_dir() {
+  local directory="$1" label="$2" parent owner mode
+  [[ $directory == /* ]] || fail "unsafe_directory" "$label must use an absolute path."
+  if [[ -e $directory || -L $directory ]]; then
+    [[ -d $directory && ! -L $directory ]] || fail "unsafe_directory" "$label must be a real directory."
+  else
+    parent=${directory%/*}
+    [[ -d $parent && ! -L $parent ]] || fail "unsafe_directory" "$label parent must be a real directory."
+    [[ $(stat -c %u -- "$parent") == $(id -u) ]] || fail "unsafe_directory" "$label parent has the wrong owner."
+    mkdir -- "$directory"
+  fi
+  owner=$(stat -c %u -- "$directory")
+  [[ $owner == $(id -u) ]] || fail "unsafe_directory" "$label has the wrong owner."
+  chmod 700 -- "$directory"
+  mode=$(stat -c %a -- "$directory")
+  [[ $mode == 700 ]] || fail "unsafe_directory" "$label must be private."
+}
+
+validate_api_body() {
+  local body="$1"
+  jq -e '
+    all(.[];
+      .action == 0 and (.param | type == "object") and
+      if .cmd == "PtzCtrl" then
+        (.param | ((keys - ["channel","op","speed","id"]) | length) == 0
+          and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
+          and (.op | IN("Stop","ToPos"))
+          and (.speed | type == "number" and floor == . and . >= 1 and . <= 64)
+          and ((.op != "ToPos") or (.id | type == "number" and floor == . and . >= 0 and . <= 255)))
+      elif .cmd == "StartZoomFocus" then
+        (.param | ((keys - ["channel","op","pos"]) | length) == 0
+          and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
+          and (.op | IN("ZoomInc","ZoomDec")) and (.pos | type == "number"))
+      elif .cmd == "SetWhiteLed" then
+        (.param | ((keys - ["channel","WhiteLed"]) | length) == 0
+          and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
+          and (.WhiteLed | type == "object" and ((keys - ["state"]) | length) == 0
+            and (.state == 0 or .state == 1)))
+      elif (.cmd == "SetAudioAlarm" or .cmd == "SetAudioAlarmV20") then
+        (.param | ((keys - ["channel","Audio"]) | length) == 0
+          and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
+          and (.Audio | type == "object" and ((keys - ["enable"]) | length) == 0
+            and (.enable == 0 or .enable == 1)))
+      else true end)
+  ' <<<"$body" >/dev/null 2>&1 || fail "invalid_body" "API command parameters are invalid."
+}
+
+validate_api_response() {
+  local response="$1" body="$2"
+  jq -e 'type == "array" and length >= 1
+      and all(.[]; (.code | type == "number") and (.code | floor) == .code)' \
+    <<<"$response" >/dev/null 2>&1 \
+    || fail "invalid_response" "Camera API response entries require numeric status codes."
+  if jq -e 'any(.[]?; (.code // 0) != 0 and
+      (((.error.rspCode // 0) | IN(-6,-7)) or ((.error.detail // "") | test("login|token|auth"; "i"))))' \
+      <<<"$response" >/dev/null; then
+    fail "authentication_failed" "Camera authentication or session token failed."
+  fi
+  jq -e 'any(.[]?; (.code // 0) == 0)' <<<"$response" >/dev/null \
+    || fail "camera_api_error" "Camera rejected the requested operation."
+  if jq -e 'any(.[]; .cmd | IN("PtzCtrl","StartZoomFocus","SetWhiteLed","SetAudioAlarm","SetAudioAlarmV20"))' \
+      <<<"$body" >/dev/null; then
+    jq -e 'all(.[]?; (.code // 1) == 0)' <<<"$response" >/dev/null \
+      || fail "camera_command_failed" "Camera rejected a physical control command."
+  fi
+}
+
+validate_login_response() {
+  local response="$1" token_value
+  jq -e 'type == "array" and length == 1 and .[0].cmd == "Login"
+      and (.[0].code | type == "number")' <<<"$response" >/dev/null 2>&1 \
+    || fail "invalid_response" "Camera returned an invalid login response."
+  jq -e '.[0].code == 0' <<<"$response" >/dev/null 2>&1 \
+    || fail "authentication_failed" "Camera rejected the local account credentials."
+  token_value=$(jq -r '.[0].value.Token.name // ""' <<<"$response")
+  valid_token "$token_value" \
+    || fail "invalid_response" "Camera login response did not contain a valid session token."
+  jq -e '.[0].value.Token.leaseTime == null
+      or (.[0].value.Token.leaseTime | type == "number" and . > 0)' \
+    <<<"$response" >/dev/null 2>&1 \
+    || fail "invalid_response" "Camera login response contained an invalid token lease."
+}
+
+lookup_password() {
+  local lookup_output lookup_rc
+  set +e
+  lookup_output=$(timeout 20s secret-tool lookup \
+    application omarchy-reolink host-id "$host_id" kind password 2>&1)
+  lookup_rc=$?
+  set -e
+  if [[ $lookup_rc == 0 && -n $lookup_output ]]; then
+    password=$lookup_output
+  elif [[ $lookup_rc == 1 && -z $lookup_output ]]; then
+    unset lookup_output
+    fail "secret_missing" "No password is stored for this host."
+  else
+    unset lookup_output
+    fail "secret_lookup_failed" "The desktop keyring could not retrieve the password."
+  fi
+  unset lookup_output
+}
+
+best_effort_ptz_stop() {
+  [[ ${ptz_stop_pending:-0} == 1 ]] || return 0
+  local stop_body curl_config
+  local -a stop_args=(-q --silent --noproxy '*' --proto '=http,https'
+    --connect-timeout 2 --max-time 4 --request POST --header 'Content-Type: application/json'
+    --max-filesize "$JSON_LIMIT" --config /dev/fd/3 --data-binary @-)
+  [[ $tls_mode == insecure ]] && stop_args+=(--insecure)
+  stop_body=$(jq -cn --argjson channel "$channel" \
+    '[{cmd:"PtzCtrl",action:0,param:{channel:$channel,op:"Stop",speed:24}}]')
+  curl_config="url = \"$base_url?cmd=PtzCtrl&token=$token\""
+  printf '%s' "$stop_body" | curl "${stop_args[@]}" \
+    3<<<"$curl_config" >/dev/null 2>&1 || true
+}
+
+request=""
+read_request
+operation=$(jq -r '.operation // ""' <<<"$request")
+host_id=$(jq -r '.hostId // ""' <<<"$request")
+address=$(jq -r '.address // ""' <<<"$request")
+transport=$(jq -r '.transport // ""' <<<"$request")
+tls_mode=$(jq -r '.tlsMode // "verify"' <<<"$request")
+port=$(jq -r '.port // 0' <<<"$request")
+username=$(jq -r '.username // ""' <<<"$request")
+
+valid_host_id "$host_id" || fail "invalid_host_id" "Invalid host identifier."
+valid_address "$address" || fail "invalid_address" "Host must be an IP address or hostname without a URL path."
+[[ $transport == https || $transport == http ]] || fail "invalid_transport" "Transport must be http or https."
+[[ $tls_mode == verify || $tls_mode == insecure ]] || fail "invalid_tls_mode" "TLS mode must be verify or insecure."
+[[ $port =~ ^[0-9]+$ ]] && ((port >= 1 && port <= 65535)) \
+  || fail "invalid_port" "Port must be between 1 and 65535."
+valid_username "$username" || fail "invalid_username" "Invalid local device username."
+
+base_url="${transport}://${address}:${port}/cgi-bin/api.cgi"
+
+case "$operation" in
+  login)
+    password=""
+    lookup_password
+    login_body=$(printf '%s' "$password" | jq -Rsc --arg username "$username" \
+      '[{"cmd":"Login","action":0,"param":{"User":{"userName":$username,"password":.}}}]')
+    unset password
+    login_response=""
+    if ! login_response=$(curl_json "$base_url?cmd=Login" "$login_body" "$JSON_LIMIT" "$tls_mode"); then
+      printf '%s\n' "$login_response"
+      exit 1
+    fi
+    validate_login_response "$login_response"
+    printf '%s\n' "$login_response"
+    ;;
+
+  api)
+    token=$(jq -r '.token // ""' <<<"$request")
+    valid_token "$token" || fail "invalid_token" "Invalid in-memory session token."
+    body=$(jq -c '.body // empty' <<<"$request")
+    jq -e 'type == "array" and length >= 1 and length <= 64' <<<"$body" >/dev/null 2>&1 \
+      || fail "invalid_body" "API body must contain 1 to 64 commands."
+    while IFS= read -r command_name; do
+      command_allowed "$command_name" || fail "command_denied" "Camera command is not allowed."
+    done < <(jq -r '.[].cmd // ""' <<<"$body")
+    validate_api_body "$body"
+    first_command=$(jq -r '.[0].cmd' <<<"$body")
+    cap=$JSON_LIMIT
+    jq -e 'any(.[]; .cmd == "Search" or .cmd == "Playback" or .cmd == "Download" or .cmd == "NvrDownload")' \
+      <<<"$body" >/dev/null && cap=$RECORDING_LIMIT
+    response=""
+    if ! response=$(curl_json "$base_url?cmd=${first_command}&token=${token}" "$body" "$cap" "$tls_mode"); then
+      printf '%s\n' "$response"
+      exit 1
+    fi
+    jq -e 'type == "array"' <<<"$response" >/dev/null 2>&1 \
+      || fail "invalid_response" "Camera API response must be an array."
+    validate_api_response "$response" "$body"
+    printf '%s\n' "$response"
+    unset token
+    ;;
+
+  ptz-pulse)
+    token=$(jq -r '.token // ""' <<<"$request")
+    channel=$(jq -r '.channel // -1' <<<"$request")
+    direction=$(jq -r '.direction // ""' <<<"$request")
+    duration_ms=$(jq -r '.durationMs // 1200' <<<"$request")
+    valid_token "$token" || fail "invalid_token" "Invalid in-memory session token."
+    [[ $channel =~ ^[0-9]+$ ]] && ((channel <= 63)) \
+      || fail "invalid_channel" "Channel must be between 0 and 63."
+    [[ $direction == Left || $direction == Right || $direction == Up || $direction == Down ]] \
+      || fail "invalid_ptz_direction" "PTZ direction is not allowed."
+    [[ $duration_ms =~ ^[0-9]+$ ]] && ((duration_ms >= 100 && duration_ms <= 1500)) \
+      || fail "invalid_ptz_duration" "PTZ safety duration must be 100 to 1500 milliseconds."
+    # The guardian is the sole network actor. It owns the ordered Start -> Stop
+    # sequence, so killing this wrapper can never leave a late curl delivering
+    # Start after a different process has already sent Stop.
+    guardian_request=$(jq -c --argjson parentPid "$$" \
+      '.operation = "ptz-guardian" | .parentPid = $parentPid' <<<"$request")
+    trap 'exit 143' INT TERM
+    guardian_response=""
+    if ! guardian_response=$(printf '%s\n' "$guardian_request" | /usr/bin/bash "$0"); then
+      printf '%s\n' "$guardian_response"
+      exit 1
+    fi
+    trap - INT TERM
+    unset token guardian_request
+    printf '%s\n' "$guardian_response"
+    ;;
+
+  ptz-guardian)
+    token=$(jq -r '.token // ""' <<<"$request")
+    channel=$(jq -r '.channel // -1' <<<"$request")
+    direction=$(jq -r '.direction // ""' <<<"$request")
+    duration_ms=$(jq -r '.durationMs // 1200' <<<"$request")
+    parent_pid=$(jq -r '.parentPid // 0' <<<"$request")
+    valid_token "$token" || fail "invalid_token" "Invalid in-memory session token."
+    [[ $channel =~ ^[0-9]+$ ]] && ((channel <= 63)) \
+      || fail "invalid_channel" "Channel must be between 0 and 63."
+    [[ $direction == Left || $direction == Right || $direction == Up || $direction == Down ]] \
+      || fail "invalid_ptz_direction" "PTZ direction is not allowed."
+    [[ $duration_ms =~ ^[0-9]+$ ]] && ((duration_ms >= 100 && duration_ms <= 1500)) \
+      || fail "invalid_ptz_duration" "PTZ safety duration must be 100 to 1500 milliseconds."
+    [[ $parent_pid =~ ^[0-9]+$ ]] && ((parent_pid > 1)) \
+      || fail "invalid_parent" "PTZ guardian parent is invalid."
+    start_body=$(jq -cn --argjson channel "$channel" --arg direction "$direction" \
+      '[{cmd:"PtzCtrl",action:0,param:{channel:$channel,op:$direction,speed:24}}]')
+    ptz_stop_pending=1
+    trap best_effort_ptz_stop EXIT INT TERM
+    pulse_started_ms=$(monotonic_ms)
+    pulse_deadline_seconds=$(printf '%d.%03d' "$((duration_ms / 1000))" "$((duration_ms % 1000))")
+    start_response=""
+    if ! start_response=$(curl_json "$base_url?cmd=PtzCtrl&token=${token}" "$start_body" \
+        "$JSON_LIMIT" "$tls_mode" "$pulse_deadline_seconds"); then
+      printf '%s\n' "$start_response"
+      exit 1
+    fi
+    validate_api_response "$start_response" "$start_body"
+    pulse_elapsed_ms=$(($(monotonic_ms) - pulse_started_ms))
+    ((pulse_elapsed_ms >= 0)) || pulse_elapsed_ms=$duration_ms
+    ((pulse_elapsed_ms <= duration_ms)) || pulse_elapsed_ms=$duration_ms
+    pulse_remaining_ms=$((duration_ms - pulse_elapsed_ms))
+    guardian_steps=$(((pulse_remaining_ms + 49) / 50))
+    for ((guardian_step = 0; guardian_step < guardian_steps; guardian_step += 1)); do
+      kill -0 "$parent_pid" 2>/dev/null || break
+      sleep 0.05
+    done
+    best_effort_ptz_stop
+    ptz_stop_pending=0
+    trap - EXIT INT TERM
+    unset token
+    jq -cn '{ok:true}'
+    ;;
+
+  snapshot)
+    token=$(jq -r '.token // ""' <<<"$request")
+    channel=$(jq -r '.channel // -1' <<<"$request")
+    valid_token "$token" || fail "invalid_token" "Invalid in-memory session token."
+    [[ $channel =~ ^[0-9]+$ ]] && ((channel <= 63)) \
+      || fail "invalid_channel" "Channel must be between 0 and 63."
+    cache_home=${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}
+    snapshot_root="$cache_home/omarchy-reolink/snapshots"
+    destination="$snapshot_root/${host_id}-ch${channel}.jpg"
+    nonce="$(date +%s)-${RANDOM}"
+    curl_snapshot "$base_url?cmd=Snap&channel=${channel}&rs=${nonce}&token=${token}" "$tls_mode" "$destination"
+    unset token
+    ;;
+
+  *) fail "operation_denied" "Unsupported HTTP operation." ;;
+esac

@@ -1,0 +1,37 @@
+name: Hardware compatibility report
+description: Record sanitized real-device behavior
+body:
+  - type: input
+    id: topology
+    attributes:
+      label: Topology
+      description: Standalone, NVR, or Home Hub
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model and hardware revision
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware
+    validations:
+      required: true
+  - type: checkboxes
+    id: features
+    attributes:
+      label: Verified features
+      options:
+        - label: Snapshot
+        - label: Fluent live
+        - label: Clear live
+        - label: Events
+        - label: Recordings
+        - label: PTZ/zoom
+        - label: Spotlight/siren
+  - type: markdown
+    attributes:
+      value: Do not attach request dumps, credentials, tokens, media URLs, snapshots, or recordings.

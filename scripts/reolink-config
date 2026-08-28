@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export LC_ALL=C
+umask 077
+
+fail() {
+  local code="$1" message="$2"
+  jq -cn --arg code "$code" --arg message "$message" \
+    '{ok:false,error:{code:$code,message:$message}}'
+  exit 1
+}
+
+request=""
+trailing=""
+IFS= read -r -n 1048577 request \
+  || [[ -n $request ]] || fail "invalid_request" "Configuration request is empty."
+((${#request} <= 1048576)) || fail "request_too_large" "Configuration request exceeds 1 MiB."
+if IFS= read -r -t 0.05 -n 1 trailing; then
+  fail "invalid_request" "Configuration request must be a single bounded line."
+fi
+jq -e 'type == "object"' <<<"$request" >/dev/null 2>&1 \
+  || fail "invalid_request" "Configuration request must be exactly one JSON object."
+
+operation=$(jq -r '.operation // ""' <<<"$request")
+config_home=${XDG_CONFIG_HOME:-${HOME:?HOME is required}/.config}
+cache_home=${XDG_CACHE_HOME:-${HOME:?HOME is required}/.cache}
+config_dir="$config_home/omarchy-reolink"
+config_path="$config_dir/config.json"
+snapshot_dir="$cache_home/omarchy-reolink/snapshots"
+default_config='{"version":1,"hosts":[],"cleanupHostIds":[],"preferences":{"notify":{"visitor":true,"person":true,"vehicle":true,"package":true,"motion":false}}}'
+
+prepare_base() {
+  local base="$1" label="$2"
+  [[ $base == /* ]] || fail "unsafe_directory" "$label must use an absolute path."
+  if [[ ! -e $base && ! -L $base ]]; then
+    local parent=${base%/*}
+    [[ -d $parent && ! -L $parent && $(stat -c %u -- "$parent") == $(id -u) ]] \
+      || fail "unsafe_directory" "$label parent must be a real owned directory."
+    mkdir -- "$base"
+  fi
+  [[ -d $base && ! -L $base ]] || fail "unsafe_directory" "$label must be a real directory."
+  [[ $(stat -c %u -- "$base") == $(id -u) ]] || fail "unsafe_directory" "$label has the wrong owner."
+}
+
+validate_config() {
+  local value="$1"
+  jq -e '
+    ((keys - ["version","hosts","cleanupHostIds","preferences"]) | length) == 0
+    and .version == 1
+    and (.hosts | type == "array" and length <= 64)
+    and all(.hosts[];
+      ((keys - ["id","address","port","rtspPort","transport","tlsMode","username","displayName"]) | length) == 0
+      and (.id | type == "string" and test("^host_[A-Za-z0-9_-]{1,96}$"))
+      and (.address | type == "string" and test("^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$")
+        and ((contains("..") or contains(".-") or contains("-.")) | not))
+      and (.port | type == "number" and floor == . and . >= 1 and . <= 65535)
+      and (.rtspPort | type == "number" and floor == . and . >= 1 and . <= 65535)
+      and (.transport == "http" or .transport == "https")
+      and (.tlsMode == "verify" or .tlsMode == "insecure")
+      and (.username | type == "string" and test("^[A-Za-z0-9._@+-]{1,64}$"))
+      and (.displayName | type == "string" and length >= 1 and length <= 80
+        and (test("[\u0000-\u001f\u007f]") | not)))
+    and (.cleanupHostIds | type == "array" and length <= 64
+      and all(.[]; type == "string" and test("^host_[A-Za-z0-9_-]{1,96}$"))
+      and (unique | length) == length)
+    and (.preferences | type == "object"
+      and ((keys - ["notify"]) | length) == 0
+      and (.notify | type == "object"
+        and ((keys - ["visitor","person","vehicle","package","motion","pet"]) | length) == 0
+        and all(.[]; type == "boolean")))
+  ' <<<"$value" >/dev/null 2>&1 \
+    || fail "invalid_config" "Configuration contains invalid data or a forbidden field."
+}
+
+prepare_private_dir() {
+  local directory="$1" label="$2" parent
+  parent=${directory%/*}
+  prepare_base "$parent" "$label parent"
+  if [[ -e $directory || -L $directory ]]; then
+    [[ -d $directory && ! -L $directory ]] || fail "unsafe_directory" "$label must be a real directory."
+  else
+    mkdir -- "$directory"
+  fi
+  [[ $(stat -c %u -- "$directory") == $(id -u) ]] || fail "unsafe_directory" "$label has the wrong owner."
+  chmod 700 -- "$directory"
+  [[ $(stat -c %a -- "$directory") == 700 ]] || fail "unsafe_directory" "$label must be private."
+}
+
+case "$operation" in
+  load)
+    if [[ ! -f $config_path ]]; then
+      [[ ! -L $config_dir ]] || fail "unsafe_config" "Configuration directory may not be a symlink."
+      printf '%s\n' "$default_config"
+      exit 0
+    fi
+    prepare_private_dir "$config_dir" "configuration directory"
+    [[ ! -L $config_path ]] || fail "unsafe_config" "Configuration file may not be a symlink."
+    [[ -f $config_path && $(stat -c %u -- "$config_path") == $(id -u) ]] \
+      || fail "unsafe_config" "Configuration file has the wrong type or owner."
+    [[ $(stat -c %s -- "$config_path") -le 1048576 ]] \
+      || fail "config_too_large" "Configuration exceeds 1 MiB."
+    [[ $(stat -c %a -- "$config_path") == 600 ]] \
+      || fail "unsafe_config" "Configuration file must have mode 0600."
+    validate_config "$(<"$config_path")"
+    cat -- "$config_path"
+    ;;
+
+  save)
+    config=$(jq -c '.config // empty' <<<"$request")
+    validate_config "$config"
+    prepare_private_dir "$config_dir" "configuration directory"
+    temporary=$(mktemp --tmpdir="$config_dir" .config.XXXXXXXX)
+    trap 'rm -f -- "$temporary"' EXIT
+    printf '%s\n' "$config" >"$temporary"
+    chmod 600 -- "$temporary"
+    mv -f -- "$temporary" "$config_path"
+    trap - EXIT
+    jq -cn '{ok:true}'
+    ;;
+
+  purge-host)
+    host_id=$(jq -r '.hostId // ""' <<<"$request")
+    [[ $host_id =~ ^host_[A-Za-z0-9_-]{1,96}$ ]] || fail "invalid_host_id" "Invalid host identifier."
+    if [[ -e ${snapshot_dir%/snapshots} || -L ${snapshot_dir%/snapshots} ]]; then
+      prepare_private_dir "${snapshot_dir%/snapshots}" "cache directory"
+    fi
+    if [[ -e $snapshot_dir || -L $snapshot_dir ]]; then
+      prepare_private_dir "$snapshot_dir" "snapshot directory"
+      find "$snapshot_dir" -maxdepth 1 -type f -name "${host_id}-ch*.jpg" -delete
+    fi
+    jq -cn '{ok:true}'
+    ;;
+
+  clear)
+    if [[ -e $config_dir || -L $config_dir ]]; then
+      prepare_private_dir "$config_dir" "configuration directory"
+      [[ ! -L $config_path ]] || fail "unsafe_config" "Configuration file may not be a symlink."
+      rm -f -- "$config_path"
+    fi
+    if [[ -e ${snapshot_dir%/snapshots} || -L ${snapshot_dir%/snapshots} ]]; then
+      prepare_private_dir "${snapshot_dir%/snapshots}" "cache directory"
+    fi
+    if [[ -e $snapshot_dir || -L $snapshot_dir ]]; then
+      prepare_private_dir "$snapshot_dir" "snapshot directory"
+      find "$snapshot_dir" -maxdepth 1 -type f -name 'host_*-ch*.jpg' -delete
+    fi
+    jq -cn '{ok:true}'
+    ;;
+
+  *) fail "operation_denied" "Unsupported configuration operation." ;;
+esac

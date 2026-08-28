@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run package-free portable checks
+        env:
+          REOLINK_PORTABLE_ONLY: "1"
+        run: ./scripts/check.sh
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stock-runtime equivalents for integration tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dbus-x11 gnome-keyring libsecret-tools socat mpv
+      - name: Run keyring, CGI, headless player, and leakage gates
+        run: |
+          dbus-run-session -- bash -c '
+            mkdir -p "$HOME/.local/share/keyrings"
+            printf "" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            REOLINK_SKIP_REAL_MPV=1 ./scripts/check.sh
+          '

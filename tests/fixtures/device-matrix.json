@@ -1,0 +1,14 @@
+[
+  {"id":"fixed-poe","topology":"standalone","channels":1,"features":["snapshot","fluent","clear","person","vehicle"]},
+  {"id":"plugin-wifi","topology":"standalone","channels":1,"features":["snapshot","fluent","clear","motion"]},
+  {"id":"ptz","topology":"standalone","channels":1,"features":["ptz","presets","zoom","siren"]},
+  {"id":"doorbell","topology":"standalone","channels":1,"features":["visitor","person","package"]},
+  {"id":"floodlight","topology":"standalone","channels":1,"features":["spotlight","siren"]},
+  {"id":"nvr-four-channel","topology":"nvr","channels":4,"features":["recordings","batched-events"]},
+  {"id":"home-hub-battery","topology":"home-hub","channels":1,"features":["sleep","snapshot","fluent"]},
+  {"id":"dual-lens","topology":"standalone","channels":2,"features":["logical-channel"]},
+  {"id":"old-firmware","topology":"standalone","channels":1,"features":[],"unsupported":["GetEvents","SetAudioAlarm"]},
+  {"id":"offline","topology":"standalone","channels":1,"error":"network_error"},
+  {"id":"auth-error","topology":"standalone","channels":1,"error":"authentication_failed"},
+  {"id":"malformed-response","topology":"standalone","channels":0,"error":"invalid_response"}
+]

@@ -1,0 +1,24 @@
+name: Bug report
+description: Report a sanitized plugin problem
+body:
+  - type: markdown
+    attributes:
+      value: Never include passwords, tokens, camera URLs, snapshots, recordings, or private LAN details.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What happened and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: omarchy
+    attributes:
+      label: Omarchy version
+    validations:
+      required: true
+  - type: textarea
+    id: sanitized-logs
+    attributes:
+      label: Sanitized diagnostics
+      description: Remove addresses, usernames, tokens, URLs, filenames, and camera data.

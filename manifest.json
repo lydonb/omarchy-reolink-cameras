@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.rodrix2000.reolink-cameras",
+  "name": "Reolink Cameras",
+  "version": "0.1.0",
+  "author": "Rudy Rodriguez",
+  "license": "MIT",
+  "description": "Native, local-first Reolink camera access for Omarchy.",
+  "homepage": "https://github.com/rodrix2000/omarchy-reolink-cameras",
+  "repository": "https://github.com/rodrix2000/omarchy-reolink-cameras",
+  "keywords": [
+    "reolink",
+    "security-camera",
+    "local-first",
+    "quickshell",
+    "omarchy"
+  ],
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Reolink Cameras",
+    "description": "View and respond to local Reolink cameras.",
+    "category": "System",
+    "aliases": [
+      "camera",
+      "nvr",
+      "security",
+      "home hub"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
