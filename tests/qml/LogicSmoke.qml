@@ -157,11 +157,23 @@ ShellRoot {
         name: "/mnt/reolink/bad\u0000recording.mp4", type: "main\u0000spoof",
         StartTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 1, sec: 20 },
         EndTime: { year: 2026, mon: 8, day: 28, hour: 16, min: 1, sec: 40 }
+      },
+      {
+        name: "Mp4Record/2026-08-28/relative.mp4", type: "main",
+        StartTime: { year: 2026, mon: 8, day: 28, hour: 12, min: 0, sec: 0 },
+        EndTime: { year: 2026, mon: 8, day: 28, hour: 12, min: 1, sec: 0 }
+      },
+      {
+        name: "Mp4Record/../private.mp4", type: "main",
+        StartTime: { year: 2026, mon: 8, day: 28, hour: 12, min: 0, sec: 0 },
+        EndTime: { year: 2026, mon: 8, day: 28, hour: 12, min: 1, sec: 0 }
       }
     ] } } }]
     var parsedRecordings = Model.parseRecordings(recordingResponse, endpoint.value.id, 0)
-    assertTrue(parsedRecordings.length === 4
+    assertTrue(parsedRecordings.length === 6
       && parsedRecordings[1].playbackPath === "/mnt/reolink/event.mp4"
+      && parsedRecordings[4].playbackPath === "/Mp4Record/2026-08-28/relative.mp4"
+      && parsedRecordings[5].playbackPath === ""
       && parsedRecordings[1].startMs > 0,
       "Reolink Search filename was not normalized as a playable recording")
     assertTrue(parsedRecordings[3].playbackPath === ""

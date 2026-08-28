@@ -11,7 +11,7 @@ the hardware-validation matrix is complete._
 The panel uses private local JPEG snapshots. Fluent and Clear video open in
 stock `mpv`; no media framework or camera daemon is added to Omarchy.
 
-> **Development status:** `0.2.2` is an experimental hardware-validation build,
+> **Development status:** `0.2.3` is an experimental hardware-validation build,
 > not a tagged V1 release. The fixture inventory, helper, QML, live-shell, and
 > secret-leak gates pass on Omarchy 4.0.1.
 > Real Reolink hardware coverage is still being recorded; see

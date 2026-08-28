@@ -97,6 +97,16 @@ invalid_recording_rc=$?
 set -e
 ((invalid_recording_rc != 0))
 jq -e '.error.code == "invalid_request"' <<<"$invalid_recording_output" >/dev/null
+traversal_recording=$(jq -cn '{
+  kind:"recording",hostId:"host_fixture",address:"127.0.0.1",transport:"https",
+  tlsMode:"verify",port:443,token:"SAFE_SESSION_TOKEN",playbackPath:"/Mp4Record/../private.mp4"
+}')
+set +e
+traversal_recording_output=$(printf '%s\n' "$traversal_recording" | "$plugin_root/scripts/reolink-player")
+traversal_recording_rc=$?
+set -e
+((traversal_recording_rc != 0))
+jq -e '.error.code == "invalid_request"' <<<"$traversal_recording_output" >/dev/null
 set +e
 player_lookup_error=$(printf '%s\n' "$player_lookup" \
   | DBUS_SESSION_BUS_ADDRESS="$bad_bus" "$plugin_root/scripts/reolink-player")

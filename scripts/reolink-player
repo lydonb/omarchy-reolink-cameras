@@ -70,7 +70,9 @@ validate_controller_request() {
       and (.token | type == "string" and test("^[A-Za-z0-9._~-]{1,256}$"))
       and (.playbackPath | type == "string" and length >= 1 and length <= 4096
         and startswith("/") and (test("[\u0000-\u001f\u007f]") | not)
-        and ((contains("://") or contains("\\\\") or contains("#")) | not))
+        and ((contains("://") or contains("\\\\") or contains("#")) | not)
+        and ((split("/")[1:]) | length >= 1
+          and all(.[]; length >= 1 and . != "." and . != "..")))
     else false end
   ' <<<"$request" >/dev/null 2>&1 \
     || fail "invalid_request" "Player request contains invalid or unsupported fields."
@@ -301,7 +303,9 @@ case "$kind" in
       || fail "invalid_token" "Invalid recording session token."
     [[ ${#playback_path} -ge 1 && ${#playback_path} -le 4096 && $playback_path == /* \
       && $playback_path != *://* && $playback_path != *\\* && $playback_path != *\#* \
-      && $playback_path != *$'\n'* && $playback_path != *$'\r'* ]] \
+      && $playback_path != *$'\n'* && $playback_path != *$'\r'* \
+      && $playback_path != *'//'* && $playback_path != *'/./'* \
+      && $playback_path != *'/../'* && $playback_path != */. && $playback_path != */.. ]] \
       || fail "invalid_playback_path" "Recording path is invalid."
     encoded_path=$(printf '%s' "$playback_path" | jq -Rsr @uri)
     media_url="${transport}://${address}:${port}/cgi-bin/api.cgi?cmd=Playback&source=${encoded_path}&token=${token}"

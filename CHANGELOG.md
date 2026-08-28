@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.2.3 - 2026-08-28
+
+- Normalize safe relative `Mp4Record/...` search results before playback for
+  Reolink firmware that omits the leading slash.
+- Reject empty and traversal path segments at both the QML model and hardened
+  player boundaries.
+
 ## 0.2.2 - 2026-08-28
 
 - Size panel tabs from the usable content width and elide long camera, event,
