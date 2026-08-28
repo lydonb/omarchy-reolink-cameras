@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Document working HTTPS/self-signed, RTSP, local-account, and HTTP redirect
+  setup paths for Reolink devices.
+
 ## 0.1.2 - 2026-08-28
 
 - Include the bounded numeric HTTP response status in camera transport errors

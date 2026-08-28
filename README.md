@@ -51,6 +51,51 @@ Prefer:
 A dedicated least-privilege local Reolink user is recommended where the
 device supports one.
 
+### Reolink camera settings
+
+Before adding a powered camera, NVR, or Home Hub, open its Reolink **Device
+Settings**, select the device-model card, then open **Advanced Network
+Settings → Server Settings**. The exact menu wording can vary by firmware.
+
+- Enable **HTTPS** on port `443` for control, discovery, and snapshots.
+- Enable **RTSP** on port `554` for Fluent and Clear video playback.
+- The existing Basic Service port `9000` may remain enabled for Reolink's own
+  applications, but this plugin does not use it.
+- HTTP, RTMP, and ONVIF are not required by this plugin. Leave unused services
+  disabled unless another trusted local integration needs them.
+
+Use a bare LAN address rather than a URL. A typical powered Reolink setup is:
+
+| Plugin field | Typical value |
+| --- | --- |
+| Host or IP | `192.168.1.54` |
+| Transport | `HTTPS` |
+| Port | `443` |
+| TLS | `Allow self-signed · trusted LAN only` when the camera's local certificate cannot be verified |
+| Username | `admin` (lowercase default device administrator) |
+| Password | The local device password—not a Reolink account/cloud password |
+| Display name | Any local label, such as `Front Door` |
+
+`Share Device` links and Reolink account email credentials are not local
+device credentials and cannot be used here. Models without **User Management**
+may expose only the built-in `admin` account. Battery-family devices generally
+need a compatible Home Hub; configure the Hub address and local credentials in
+that topology.
+
+See Reolink's official
+[port configuration guide](https://support.reolink.com/articles/900000621783-How-to-Configure-Reolink-Ports-Settings/)
+for current app menus and model-specific availability.
+
+### Add troubleshooting
+
+| Message | Meaning and action |
+| --- | --- |
+| `Camera returned HTTP status 302.` | HTTP port `80` redirected to HTTPS. Select HTTPS, port `443`, and the appropriate TLS mode. |
+| `Camera TLS verification or negotiation failed.` | Confirm HTTPS is enabled. On a trusted private LAN, explicitly select the self-signed TLS option. |
+| `Camera rejected the local account credentials.` | Use the local device username/password. The default administrator is usually lowercase `admin`; do not use Reolink account email credentials. |
+| `Camera returned HTTP status 401.` or `403.` | The endpoint rejected authorization. Recheck the local account and device-access mode. |
+| `Camera network request failed.` | Confirm the bare IP address, enabled HTTPS port, same-LAN reachability, and local firewall rules. |
+
 ## What is implemented
 
 - `service` + `bar-widget` inside the existing `omarchy-shell`;
