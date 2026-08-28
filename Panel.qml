@@ -104,10 +104,6 @@ Panel {
     passwordValue = ""
   }
 
-  function tabButtonWidth() {
-    return Math.floor((panel.contentWidth - Style.space(18)) / 4)
-  }
-
   Connections {
     target: root.effectiveService
     function onAddCompleted(ok, message) {
@@ -355,19 +351,23 @@ Panel {
                 Column {
                   width: parent.width - refreshButton.width - parent.spacing
                   Text {
+                    width: parent.width
                     text: root.selectedCamera ? root.selectedCamera.name : ""
                     color: root.foreground
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.title
                     font.bold: true
+                    elide: Text.ElideRight
                   }
                   Text {
+                    width: parent.width
                     text: root.selectedCamera
                       ? (root.selectedCamera.online ? "Online" : "Offline")
                         + (root.selectedCamera.model ? " · " + root.selectedCamera.model : "") : ""
                     color: Qt.darker(root.foreground, 1.45)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
                   }
                 }
                 PanelActionButton {
@@ -470,6 +470,7 @@ Panel {
               }
 
               Row {
+                id: tabRow
                 width: parent.width
                 spacing: Style.space(6)
                 Repeater {
@@ -481,7 +482,7 @@ Panel {
                   ]
                   delegate: Button {
                     required property var modelData
-                    width: root.tabButtonWidth()
+                    width: (tabRow.width - tabRow.spacing * 3) / 4
                     text: modelData.label
                     foreground: root.foreground
                     selected: root.view === modelData.key
@@ -515,9 +516,24 @@ Panel {
                     required property var modelData
                     width: parent.width
                     spacing: Style.space(8)
-                    Text { width: parent.width * 0.35; text: Events.label(eventRow.modelData.type); color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.body }
-                    Text { width: parent.width * 0.35; text: Time.clock(eventRow.modelData.timestamp); color: Qt.darker(root.foreground, 1.45); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                    Text {
+                      width: Math.max(0, (eventRow.width - viewEventButton.width - eventRow.spacing * 2) / 2)
+                      text: Events.label(eventRow.modelData.type)
+                      color: root.foreground
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.body
+                      elide: Text.ElideRight
+                    }
+                    Text {
+                      width: Math.max(0, (eventRow.width - viewEventButton.width - eventRow.spacing * 2) / 2)
+                      text: Time.clock(eventRow.modelData.timestamp)
+                      color: Qt.darker(root.foreground, 1.45)
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      elide: Text.ElideRight
+                    }
                     Button {
+                      id: viewEventButton
                       text: "View"
                       foreground: root.foreground
                       onClicked: {
@@ -690,8 +706,23 @@ Panel {
                       spacing: Style.space(8)
                       Column {
                         width: parent.width - forgetHost.width - parent.spacing
-                        Text { text: deviceRow.modelData.displayName; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.body; font.bold: true }
-                        Text { text: deviceRow.modelData.address + " · " + deviceRow.modelData.transport.toUpperCase(); color: Qt.darker(root.foreground, 1.45); font.family: root.fontFamily; font.pixelSize: Style.font.caption }
+                        Text {
+                          width: parent.width
+                          text: deviceRow.modelData.displayName
+                          color: root.foreground
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.body
+                          font.bold: true
+                          elide: Text.ElideRight
+                        }
+                        Text {
+                          width: parent.width
+                          text: deviceRow.modelData.address + " · " + deviceRow.modelData.transport.toUpperCase()
+                          color: Qt.darker(root.foreground, 1.45)
+                          font.family: root.fontFamily
+                          font.pixelSize: Style.font.caption
+                          elide: Text.ElideRight
+                        }
                       }
                       PanelActionButton {
                         id: forgetHost

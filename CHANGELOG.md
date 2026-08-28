@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.2.2 - 2026-08-28
+
+- Size panel tabs from the usable content width and elide long camera, event,
+  and endpoint labels so every control remains inside the panel.
+
 ## 0.2.1 - 2026-08-28
 
 - Reject ignored or malformed helper fields before Bash extraction and remove
