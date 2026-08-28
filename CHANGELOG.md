@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.2.6 - 2026-08-28
+
+- Document the exact Omarchy removal command, MIT licensing, and the project's
+  independent status for marketplace submission.
+- Replace the hardware-tested private LAN address in the public setup example
+  with a generic private LAN address.
+
 ## 0.2.5 - 2026-08-28
 
 - Replace the interface concept with a sanitized capture of the real panel and

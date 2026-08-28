@@ -11,7 +11,7 @@ replaced for privacy._
 The panel uses private local JPEG snapshots. Fluent and Clear video open in
 stock `mpv`; no media framework or camera daemon is added to Omarchy.
 
-> **Development status:** `0.2.5` is an experimental hardware-validation build,
+> **Development status:** `0.2.6` is an experimental hardware-validation build,
 > not a tagged V1 release. The fixture inventory, helper, QML, live-shell, and
 > secret-leak gates pass on Omarchy 4.0.1.
 > Real Reolink hardware coverage is still being recorded; see
@@ -68,7 +68,7 @@ Use a bare LAN address rather than a URL. A typical powered Reolink setup is:
 
 | Plugin field | Typical value |
 | --- | --- |
-| Host or IP | `192.168.1.54` |
+| Host or IP | `192.168.1.100` |
 | Transport | `HTTPS` |
 | Port | `443` |
 | TLS | `Allow self-signed · trusted LAN only` when the camera's local certificate cannot be verified |
@@ -212,6 +212,22 @@ only the non-secret host ID and shows **Retry credential cleanup** until the
 password is confirmed absent.
 The cleanup ID is written before credential storage, so a shell reload during
 Add remains recoverable without persisting the password itself.
+
+Then remove the plugin:
+
+```bash
+omarchy plugin remove io.github.rodrix2000.reolink-cameras
+```
+
+## License and project independence
+
+The source code and project documentation are available under the
+[MIT License](LICENSE).
+
+Reolink and Omarchy are names belonging to their respective owners. This is an
+independent community plugin and is not affiliated with, endorsed by, or
+sponsored by Reolink, Omarchy, or 37signals. Their names are used only to
+identify compatibility.
 
 ## Contributing
 
