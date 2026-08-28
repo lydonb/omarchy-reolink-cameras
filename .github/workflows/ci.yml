@@ -11,16 +11,17 @@ jobs:
   portable:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run package-free portable checks
         env:
           REOLINK_PORTABLE_ONLY: "1"
+          REOLINK_FORCE_GREP: "1"
         run: ./scripts/check.sh
 
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install stock-runtime equivalents for integration tests
         run: |
           sudo apt-get update

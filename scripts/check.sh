@@ -4,6 +4,18 @@ set -euo pipefail
 plugin_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$plugin_root"
 
+search_extended() {
+  if [[ ${REOLINK_FORCE_GREP:-0} != 1 ]] && command -v rg >/dev/null 2>&1; then rg -n "$@"
+  else grep -Ern "$@"
+  fi
+}
+
+search_fixed() {
+  if [[ ${REOLINK_FORCE_GREP:-0} != 1 ]] && command -v rg >/dev/null 2>&1; then rg -F -- "$@"
+  else grep -F -- "$@"
+  fi
+}
+
 echo "== JSON and repository structure =="
 jq -e '.schemaVersion == 1 and .id == "io.github.rodrix2000.reolink-cameras"' manifest.json >/dev/null
 [[ -f preview.png && $(stat -c %s -- preview.png) -gt 0 ]]
@@ -17,15 +29,15 @@ echo "== Shell syntax =="
 bash -n scripts/* tests/shell/* tests/security/*.sh tests/fakes/bin/mpv
 
 echo "== Static security policy =="
-if rg -n '(^|[^[:alnum:]_])eval([[:space:]]|$)|set[[:space:]]+-x|curl[[:space:]]+-v|/tmp/|--script=' \
+if search_extended '(^|[^[:alnum:]_])eval([[:space:]]|$)|set[[:space:]]+-x|curl[[:space:]]+-v|/tmp/|--script=' \
   Service.qml HostRuntime.qml BarWidget.qml Panel.qml lib scripts/reolink-*; then
   echo "error: forbidden runtime pattern found" >&2
   exit 1
 fi
-rg -F -- '--no-config' scripts/reolink-player >/dev/null
-rg -F -- '--load-scripts=no' scripts/reolink-player >/dev/null
-rg -F -- '--terminal=no' scripts/reolink-player >/dev/null
-! rg -n 'python|node|npm|mosquitto|go2rtc|docker|qt6-multimedia|home-assistant' \
+search_fixed '--no-config' scripts/reolink-player >/dev/null
+search_fixed '--load-scripts=no' scripts/reolink-player >/dev/null
+search_fixed '--terminal=no' scripts/reolink-player >/dev/null
+! search_extended 'python|node|npm|mosquitto|go2rtc|docker|qt6-multimedia|home-assistant' \
   Service.qml HostRuntime.qml BarWidget.qml Panel.qml lib scripts/reolink-*
 
 if command -v omarchy >/dev/null 2>&1; then
