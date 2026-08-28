@@ -95,7 +95,7 @@ curl_json() {
   ((bytes <= cap)) && ((rc != 63)) \
     || fail "response_too_large" "Camera response exceeded the operation limit."
   [[ $status == 000 || $status =~ ^2[0-9][0-9]$ ]] \
-    || fail "http_error" "Camera returned a non-success HTTP status."
+    || fail "http_error" "Camera returned HTTP status ${status}."
   case "$rc" in
     0) ;;
     28) fail "timeout" "Camera request timed out." ;;
@@ -137,7 +137,7 @@ curl_snapshot() {
   size=$(stat -c %s -- "$temporary")
   ((size <= SNAPSHOT_LIMIT)) || fail "snapshot_too_large" "Snapshot exceeded 20 MiB."
   ((rc == 0)) || fail "network_error" "Snapshot request failed or timed out."
-  [[ $status =~ ^2[0-9][0-9]$ ]] || fail "http_error" "Camera returned a non-success HTTP status."
+  [[ $status =~ ^2[0-9][0-9]$ ]] || fail "http_error" "Camera returned HTTP status ${status}."
   ((size >= 4)) || fail "invalid_snapshot" "Camera returned an empty snapshot."
   magic=$(od -An -tx1 -N2 -- "$temporary" | tr -d ' \n')
   [[ $magic == ffd8 ]] || fail "invalid_snapshot" "Camera response was not a JPEG image."

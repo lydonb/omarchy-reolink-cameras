@@ -193,7 +193,10 @@ grep -Fxq 'Stop' <<<"$hard_kill_trace"
 
 assert_error_code "$(jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[{cmd:"GetChnTypeInfo",action:0,param:{channel:0}}]}' <<<"$base")" response_too_large
 assert_error_code "$(jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[{cmd:"GetAudioAlarm",action:0,param:{channel:0}}]}' <<<"$base")" invalid_response
-assert_error_code "$(jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[{cmd:"GetWhiteLed",action:0,param:{channel:0}}]}' <<<"$base")" http_error
+http_status_error=$(jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[{cmd:"GetWhiteLed",action:0,param:{channel:0}}]}' <<<"$base" \
+  | "$plugin_root/scripts/reolink-http" 2>/dev/null || true)
+jq -e '.error.code == "http_error" and .error.message == "Camera returned HTTP status 500."' \
+  <<<"$http_status_error" >/dev/null
 assert_error_code "$(jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[{cmd:"GetPtzPreset",action:0,param:{channel:0}}]}' <<<"$base")" invalid_response
 assert_error_code "$(jq -c --argjson port "$tls_port" '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[{cmd:"GetDevInfo",action:0,param:{}}]} | .transport="https" | .port=$port' <<<"$base")" tls_error
 assert_error_code "$(jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[{cmd:"GetDevInfo",action:0,param:{}}]} | .port=1' <<<"$base")" network_error

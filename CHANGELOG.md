@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.2 - 2026-08-28
+
+- Include the bounded numeric HTTP response status in camera transport errors
+  so hardware validation can distinguish redirects, authorization failures,
+  and unavailable CGI endpoints.
+
 ## 0.1.1 - 2026-08-28
 
 - Preserve structured camera-helper failures in the Add flow so TLS,
