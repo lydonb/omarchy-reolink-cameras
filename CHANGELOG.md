@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## 0.2.4 - 2026-08-28
+
+- Replace the generic camera glyph with the distinct CCTV/security-camera icon
+  across the bar widget and panel states.
+
 ## 0.2.3 - 2026-08-28
 
 - Normalize safe relative `Mp4Record/...` search results before playback for

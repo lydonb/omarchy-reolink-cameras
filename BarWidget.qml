@@ -53,7 +53,7 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: root.vertical || !root.reolinkService || root.reolinkService.unseenCount === 0
-      ? "󰄀" : "󰄀 " + root.reolinkService.unseenCount
+      ? "󰞮" : "󰞮 " + root.reolinkService.unseenCount
     tooltipText: root.reolinkService ? root.reolinkService.tooltipText : "Reolink Cameras — starting"
     active: root.opened || (root.reolinkService && root.reolinkService.unseenCount > 0)
     fixedWidth: root.vertical ? root.barSize : -1

@@ -300,7 +300,7 @@ Panel {
                 enabled: root.effectiveService && !root.effectiveService.addInProgress
                 text: root.effectiveService && root.effectiveService.addInProgress
                   ? "Checking…" : "Test & Add Securely"
-                iconText: "󰄀"
+                iconText: "󰞮"
                 foreground: root.foreground
                 selected: true
                 bordered: true
@@ -400,7 +400,7 @@ Panel {
                   anchors.centerIn: parent
                   visible: !root.selectedCamera || root.selectedCamera.snapshotPath === ""
                   spacing: Style.space(6)
-                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰄀"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.display }
+                  Text { anchors.horizontalCenter: parent.horizontalCenter; text: "󰞮"; color: Qt.darker(root.foreground, 1.5); font.family: root.fontFamily; font.pixelSize: Style.font.display }
                   Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Snapshot preview"; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.body }
                 }
 
