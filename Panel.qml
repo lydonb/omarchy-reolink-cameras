@@ -25,6 +25,7 @@ Panel {
   property string removeHostId: ""
   property bool sirenActive: false
   property bool spotlightOn: false
+  property string controlFeedbackAction: ""
 
   readonly property var barIdentity: hostWidget || root
   readonly property var effectiveService: service
@@ -81,6 +82,28 @@ Panel {
   function toggle() {
     if (opened) close()
     else open()
+  }
+
+  function showControlFeedback(action) {
+    controlFeedbackAction = String(action || "")
+    controlFeedbackTimer.restart()
+  }
+
+  function controlFeedbackLabel(action) {
+    if (action === "Up" || action === "Down" || action === "Left" || action === "Right")
+      return "Moving " + action.toLowerCase() + "…"
+    if (action === "Stop") return "Stopping movement…"
+    if (action === "zoom-out") return "Zooming out…"
+    if (action === "zoom-in") return "Zooming in…"
+    if (String(action).indexOf("preset:") === 0) return "Moving to preset…"
+    return ""
+  }
+
+  Timer {
+    id: controlFeedbackTimer
+    interval: 900
+    repeat: false
+    onTriggered: root.controlFeedbackAction = ""
   }
 
   function switchPanel(direction) {
@@ -607,7 +630,7 @@ Panel {
                   visible: root.selectedCamera && !root.selectedCamera.capabilities.ptz.enabled
                     && !root.selectedCamera.capabilities.spotlight && !root.selectedCamera.capabilities.siren
                   width: parent.width
-                  text: "This camera does not report supported physical controls."
+                  text: "This camera reports no motorized PTZ, zoom, light, or siren controls."
                   color: Qt.darker(root.foreground, 1.45)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -628,24 +651,86 @@ Panel {
                     delegate: BorderSurface {
                       id: ptzButton
                       required property var modelData
+                      readonly property bool actionable: ptzButton.modelData.action !== ""
+                      readonly property bool feedbackActive: actionable
+                        && (controlMouseArea.pressed
+                          || root.controlFeedbackAction === String(ptzButton.modelData.action))
                       width: Style.space(46)
                       height: Style.space(38)
-                      color: ptzButton.modelData.action ? Util.alpha(root.foreground, 0.05) : "transparent"
-                      borderSpec: ptzButton.modelData.action ? Border.controlSpec("normal", root.foreground, Color.accent) : Border.none()
+                      color: !actionable ? "transparent"
+                        : feedbackActive ? "#ff9d00"
+                        : controlMouseArea.containsMouse ? Style.hoverFillFor(root.foreground, Color.accent)
+                        : Util.alpha(root.foreground, 0.05)
+                      borderSpec: !actionable ? Border.none()
+                        : feedbackActive ? Border.flat("#fff4d6", 3)
+                        : controlMouseArea.containsMouse
+                          ? Border.controlSpec("hover-cursor", root.foreground, Color.accent)
+                          : Border.controlSpec("normal", root.foreground, Color.accent)
                       radius: Style.cornerRadius
-                      Text { anchors.centerIn: parent; text: ptzButton.modelData.label; color: root.foreground; font.family: root.fontFamily; font.pixelSize: Style.font.title }
+                      scale: feedbackActive ? 0.86 : 1
+                      Behavior on color { ColorAnimation { duration: 70 } }
+                      Behavior on scale {
+                        NumberAnimation { duration: 90; easing.type: Easing.OutCubic }
+                      }
+                      transform: Translate {
+                        y: ptzButton.feedbackActive ? Style.space(2) : 0
+                        Behavior on y { NumberAnimation { duration: 90; easing.type: Easing.OutCubic } }
+                      }
+                      Text {
+                        anchors.centerIn: parent
+                        text: ptzButton.modelData.label
+                        color: ptzButton.feedbackActive ? "#101010" : root.foreground
+                        font.family: root.fontFamily
+                        font.pixelSize: Style.font.title
+                        font.bold: ptzButton.feedbackActive
+                      }
                       MouseArea {
+                        id: controlMouseArea
                         anchors.fill: parent
-                        enabled: ptzButton.modelData.action !== ""
+                        z: 20
+                        enabled: ptzButton.actionable
+                        hoverEnabled: true
                         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                         onPressed: {
+                          root.showControlFeedback(ptzButton.modelData.action)
                           if (!root.effectiveService) return
-                          if (ptzButton.modelData.action === "Stop") root.effectiveService.stopPtz()
+                          if (ptzButton.modelData.action === "Stop") root.effectiveService.stopPtz(true)
                           else root.effectiveService.startPtz(ptzButton.modelData.action)
                         }
-                        onReleased: if (root.effectiveService && ptzButton.modelData.action !== "Stop") root.effectiveService.stopPtz()
-                        onCanceled: if (root.effectiveService && ptzButton.modelData.action !== "Stop") root.effectiveService.stopPtz()
+                        onReleased: {
+                          // Restart after dispatch so a fast click remains
+                          // visibly depressed long enough to register.
+                          root.showControlFeedback(ptzButton.modelData.action)
+                        }
+                        // The helper owns a complete bounded pulse and its
+                        // guaranteed Stop. Releasing a quick click must not
+                        // cancel that pulse before the motor starts moving.
+                        onCanceled: if (root.effectiveService && ptzButton.modelData.action !== "Stop") root.effectiveService.stopPtz(true)
                       }
+                    }
+                  }
+                }
+
+                Item {
+                  width: parent.width
+                  height: Style.space(30)
+                  BorderSurface {
+                    anchors.centerIn: parent
+                    width: Style.space(170)
+                    height: Style.space(26)
+                    color: root.controlFeedbackAction !== "" ? Color.accent : "transparent"
+                    borderSpec: root.controlFeedbackAction !== ""
+                      ? Border.flat(Color.background, 2) : Border.none()
+                    radius: Style.cornerRadius
+                    opacity: root.controlFeedbackAction !== "" ? 1 : 0
+                    Behavior on opacity { NumberAnimation { duration: 90 } }
+                    Text {
+                      anchors.centerIn: parent
+                      text: root.controlFeedbackLabel(root.controlFeedbackAction)
+                      color: Color.background
+                      font.family: root.fontFamily
+                      font.pixelSize: Style.font.caption
+                      font.bold: true
                     }
                   }
                 }
@@ -654,8 +739,26 @@ Panel {
                   visible: root.selectedCamera && root.selectedCamera.capabilities.ptz.zoom
                   anchors.horizontalCenter: parent.horizontalCenter
                   spacing: Style.space(8)
-                  Button { text: "− Zoom"; foreground: root.foreground; bordered: true; onClicked: if (root.effectiveService) root.effectiveService.changeZoom(-1) }
-                  Button { text: "+ Zoom"; foreground: root.foreground; bordered: true; onClicked: if (root.effectiveService) root.effectiveService.changeZoom(1) }
+                  Button {
+                    text: "− Zoom"
+                    foreground: root.foreground
+                    bordered: true
+                    active: root.controlFeedbackAction === "zoom-out"
+                    onClicked: {
+                      root.showControlFeedback("zoom-out")
+                      if (root.effectiveService) root.effectiveService.changeZoom(-1)
+                    }
+                  }
+                  Button {
+                    text: "+ Zoom"
+                    foreground: root.foreground
+                    bordered: true
+                    active: root.controlFeedbackAction === "zoom-in"
+                    onClicked: {
+                      root.showControlFeedback("zoom-in")
+                      if (root.effectiveService) root.effectiveService.changeZoom(1)
+                    }
+                  }
                 }
 
                 Flow {
@@ -670,7 +773,11 @@ Panel {
                       text: modelData.name
                       foreground: root.foreground
                       bordered: true
-                      onClicked: if (root.effectiveService) root.effectiveService.gotoPreset(modelData.id)
+                      active: root.controlFeedbackAction === "preset:" + modelData.id
+                      onClicked: {
+                        root.showControlFeedback("preset:" + modelData.id)
+                        if (root.effectiveService) root.effectiveService.gotoPreset(modelData.id)
+                      }
                     }
                   }
                 }

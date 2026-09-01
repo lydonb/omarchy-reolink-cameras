@@ -6,6 +6,7 @@ import "lib/ReolinkModel.js" as Model
 import "lib/CapabilityNormalizer.js" as Capabilities
 import "lib/EventNormalizer.js" as Events
 import "lib/NotificationCommand.js" as NotificationCommand
+import "lib/PtzTiming.js" as PtzTiming
 import "lib/RequestQueue.js" as RequestQueue
 import "lib/ReolinkCommands.js" as Commands
 import "lib/Time.js" as Time
@@ -101,6 +102,17 @@ ShellRoot {
       "failed channel inherited another channel's presets")
     assertTrue(Capabilities.presets(partialPresets, 1, 1).length === 1,
       "successful channel presets were lost after a partial failure")
+    var zoomState = [{ cmd: "GetZoomFocus", code: 0, value: {
+      ZoomFocus: { channel: 0, zoom: { pos: 14 }, focus: { pos: 27 } }
+    } }]
+    assertTrue(Capabilities.zoomPosition(zoomState, 0) === 14,
+      "zoom position was not normalized")
+    assertTrue(Capabilities.zoomPosition(zoomState, 1) === -1,
+      "zoom position crossed camera channels")
+    var zoomBody = Commands.zoom(0, 15)
+    assertTrue(zoomBody[0].param.ZoomFocus.op === "ZoomPos"
+      && zoomBody[0].param.ZoomFocus.pos === 15,
+      "zoom control did not use a bounded absolute position")
     var noStreamCapabilities = Capabilities.normalize([
       { cmd: "GetAbility", code: 0, value: { Ability: {} } }
     ])
@@ -204,6 +216,14 @@ ShellRoot {
     var searchBody = Commands.recordingSearch(0, eventRange.start, eventRange.end)
     assertTrue(JSON.stringify(searchBody).indexOf("eventType") === -1,
       "recording search sent a nonstandard Reolink event filter")
+    assertTrue(PtzTiming.remainingMinimum(1000, 1050, 100) === 50,
+      "quick PTZ release did not retain a perceptible minimum pulse")
+    assertTrue(PtzTiming.remainingMinimum(1000, 1100, 100) === 0,
+      "held PTZ movement was delayed after the minimum pulse")
+    assertTrue(PtzTiming.remainingMinimum(0, 1100, 100) === 0,
+      "inactive PTZ movement produced a delayed stop")
+    assertTrue(Commands.ptzPulseEnvelope(endpoint.value, "SAFE_TOKEN", 0, "Left", 1200, 8).speed === 8,
+      "PTZ pulse did not preserve the bounded control speed")
 
     var markedOffline = Model.markHostOffline([
       { id: "one", hostId: endpoint.value.id, online: true },

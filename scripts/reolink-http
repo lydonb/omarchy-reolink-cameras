@@ -62,7 +62,7 @@ monotonic_ms() {
 
 command_allowed() {
   case "$1" in
-    Logout|GetDevInfo|GetAbility|GetChannelstatus|GetChnTypeInfo|GetNetPort|GetEnc|GetEvents|GetAiState|GetMdState|PtzCtrl|GetPtzPreset|StartZoomFocus|GetWhiteLed|SetWhiteLed|GetAudioAlarm|SetAudioAlarm|GetAudioAlarmV20|SetAudioAlarmV20|Search) return 0 ;;
+    Logout|GetDevInfo|GetAbility|GetChannelstatus|GetChnTypeInfo|GetNetPort|GetEnc|GetEvents|GetAiState|GetMdState|PtzCtrl|GetPtzPreset|GetZoomFocus|StartZoomFocus|GetWhiteLed|SetWhiteLed|GetAudioAlarm|SetAudioAlarm|GetAudioAlarmV20|SetAudioAlarmV20|Search) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -89,17 +89,19 @@ validate_envelope() {
       and (.token | type == "string" and test("^[A-Za-z0-9._~-]{1,256}$"))
       and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
     elif .operation == "ptz-pulse" then
-      (keys | sort) == ["address","channel","direction","durationMs","hostId","operation","port","tlsMode","token","transport","username"]
+      (keys | sort) == ["address","channel","direction","durationMs","hostId","operation","port","speed","tlsMode","token","transport","username"]
       and (.token | type == "string" and test("^[A-Za-z0-9._~-]{1,256}$"))
       and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
       and (.direction | IN("Left","Right","Up","Down"))
       and (.durationMs | type == "number" and floor == . and . >= 100 and . <= 1500)
+      and (.speed | type == "number" and floor == . and . >= 1 and . <= 24)
     elif .operation == "ptz-guardian" then
-      (keys | sort) == ["address","channel","direction","durationMs","hostId","operation","parentPid","port","tlsMode","token","transport","username"]
+      (keys | sort) == ["address","channel","direction","durationMs","hostId","operation","parentPid","port","speed","tlsMode","token","transport","username"]
       and (.token | type == "string" and test("^[A-Za-z0-9._~-]{1,256}$"))
       and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
       and (.direction | IN("Left","Right","Up","Down"))
       and (.durationMs | type == "number" and floor == . and . >= 100 and . <= 1500)
+      and (.speed | type == "number" and floor == . and . >= 1 and . <= 24)
       and (.parentPid | type == "number" and floor == . and . > 1)
     else false end
   ' <<<"$request" >/dev/null 2>&1 \
@@ -230,10 +232,15 @@ validate_api_body() {
           and (.op | IN("Stop","ToPos"))
           and (.speed | type == "number" and floor == . and . >= 1 and . <= 64)
           and ((.op != "ToPos") or (.id | type == "number" and floor == . and . >= 0 and . <= 255)))
+      elif .cmd == "GetZoomFocus" then
+        (.param | ((keys - ["channel"]) | length) == 0
+          and (.channel | type == "number" and floor == . and . >= 0 and . <= 63))
       elif .cmd == "StartZoomFocus" then
-        (.param | ((keys - ["channel","op","pos"]) | length) == 0
-          and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
-          and (.op | IN("ZoomInc","ZoomDec")) and (.pos | type == "number"))
+        (.param | ((keys - ["ZoomFocus"]) | length) == 0
+          and (.ZoomFocus | type == "object" and ((keys - ["channel","op","pos"]) | length) == 0
+            and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
+            and .op == "ZoomPos"
+            and (.pos | type == "number" and floor == . and . >= 0 and . <= 255)))
       elif .cmd == "SetWhiteLed" then
         (.param | ((keys - ["channel","WhiteLed"]) | length) == 0
           and (.channel | type == "number" and floor == . and . >= 0 and . <= 63)
@@ -385,6 +392,7 @@ case "$operation" in
     channel=$(jq -r '.channel // -1' <<<"$request")
     direction=$(jq -r '.direction // ""' <<<"$request")
     duration_ms=$(jq -r '.durationMs // 1200' <<<"$request")
+    speed=$(jq -r '.speed // 8' <<<"$request")
     valid_token "$token" || fail "invalid_token" "Invalid in-memory session token."
     [[ $channel =~ ^[0-9]+$ ]] && ((channel <= 63)) \
       || fail "invalid_channel" "Channel must be between 0 and 63."
@@ -392,6 +400,8 @@ case "$operation" in
       || fail "invalid_ptz_direction" "PTZ direction is not allowed."
     [[ $duration_ms =~ ^[0-9]+$ ]] && ((duration_ms >= 100 && duration_ms <= 1500)) \
       || fail "invalid_ptz_duration" "PTZ safety duration must be 100 to 1500 milliseconds."
+    [[ $speed =~ ^[0-9]+$ ]] && ((speed >= 1 && speed <= 24)) \
+      || fail "invalid_ptz_speed" "PTZ speed must be between 1 and 24."
     # The guardian is the sole network actor. It owns the ordered Start -> Stop
     # sequence, so killing this wrapper can never leave a late curl delivering
     # Start after a different process has already sent Stop.
@@ -413,6 +423,7 @@ case "$operation" in
     channel=$(jq -r '.channel // -1' <<<"$request")
     direction=$(jq -r '.direction // ""' <<<"$request")
     duration_ms=$(jq -r '.durationMs // 1200' <<<"$request")
+    speed=$(jq -r '.speed // 8' <<<"$request")
     parent_pid=$(jq -r '.parentPid // 0' <<<"$request")
     valid_token "$token" || fail "invalid_token" "Invalid in-memory session token."
     [[ $channel =~ ^[0-9]+$ ]] && ((channel <= 63)) \
@@ -421,24 +432,39 @@ case "$operation" in
       || fail "invalid_ptz_direction" "PTZ direction is not allowed."
     [[ $duration_ms =~ ^[0-9]+$ ]] && ((duration_ms >= 100 && duration_ms <= 1500)) \
       || fail "invalid_ptz_duration" "PTZ safety duration must be 100 to 1500 milliseconds."
+    [[ $speed =~ ^[0-9]+$ ]] && ((speed >= 1 && speed <= 24)) \
+      || fail "invalid_ptz_speed" "PTZ speed must be between 1 and 24."
     [[ $parent_pid =~ ^[0-9]+$ ]] && ((parent_pid > 1)) \
       || fail "invalid_parent" "PTZ guardian parent is invalid."
-    start_body=$(jq -cn --argjson channel "$channel" --arg direction "$direction" \
-      '[{cmd:"PtzCtrl",action:0,param:{channel:$channel,op:$direction,speed:24}}]')
+    start_body=$(jq -cn --argjson channel "$channel" --arg direction "$direction" --argjson speed "$speed" \
+      '[{cmd:"PtzCtrl",action:0,param:{channel:$channel,op:$direction,speed:$speed}}]')
     ptz_stop_pending=1
     trap best_effort_ptz_stop EXIT INT TERM
     pulse_started_ms=$(monotonic_ms)
     pulse_deadline_seconds=$(printf '%d.%03d' "$((duration_ms / 1000))" "$((duration_ms % 1000))")
     start_response=""
+    start_timed_out=0
     if ! start_response=$(curl_json "$base_url?cmd=PtzCtrl&token=${token}" "$start_body" \
         "$JSON_LIMIT" "$tls_mode" "$pulse_deadline_seconds"); then
-      printf '%s\n' "$start_response"
-      exit 1
+      # A PTZ command can be accepted immediately while the camera delays its
+      # HTTP response until after the requested movement window. The deadline
+      # intentionally aborts that response wait; it is not a rejected move.
+      # Every other failure still surfaces after the EXIT trap sends Stop.
+      if jq -e '.error.code == "timeout"' <<<"$start_response" >/dev/null 2>&1; then
+        start_timed_out=1
+      else
+        printf '%s\n' "$start_response"
+        exit 1
+      fi
     fi
-    validate_api_response "$start_response" "$start_body"
-    pulse_elapsed_ms=$(($(monotonic_ms) - pulse_started_ms))
-    ((pulse_elapsed_ms >= 0)) || pulse_elapsed_ms=$duration_ms
-    ((pulse_elapsed_ms <= duration_ms)) || pulse_elapsed_ms=$duration_ms
+    if ((start_timed_out == 0)); then
+      validate_api_response "$start_response" "$start_body"
+      pulse_elapsed_ms=$(($(monotonic_ms) - pulse_started_ms))
+      ((pulse_elapsed_ms >= 0)) || pulse_elapsed_ms=$duration_ms
+      ((pulse_elapsed_ms <= duration_ms)) || pulse_elapsed_ms=$duration_ms
+    else
+      pulse_elapsed_ms=$duration_ms
+    fi
     pulse_remaining_ms=$((duration_ms - pulse_elapsed_ms))
     guardian_steps=$(((pulse_remaining_ms + 49) / 50))
     for ((guardian_step = 0; guardian_step < guardian_steps; guardian_step += 1)); do

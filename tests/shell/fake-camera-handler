@@ -97,6 +97,12 @@ elif [[ $target == *cmd=GetWhiteLed* ]]; then
   respond_status '500 Internal Server Error' 'application/json' '[{"cmd":"GetWhiteLed","code":1}]'
 elif [[ $target == *cmd=GetPtzPreset* ]]; then
   respond 'application/json' '[{"cmd":"GetPtzPreset","value":{}}]'
+elif [[ $target == *cmd=GetZoomFocus* ]]; then
+  respond 'application/json' '[{"cmd":"GetZoomFocus","code":0,"value":{"ZoomFocus":{"channel":0,"zoom":{"pos":14},"focus":{"pos":27}}}}]'
+elif [[ $target == *cmd=StartZoomFocus* ]]; then
+  zoom_pos=$(jq -r '.[0].param.ZoomFocus.pos // "missing"' <<<"$body")
+  [[ -z ${FAKE_CAMERA_TRACE:-} ]] || printf 'ZoomPos:%s\n' "$zoom_pos" >>"$FAKE_CAMERA_TRACE"
+  respond 'application/json' '[{"cmd":"StartZoomFocus","code":0,"value":{"rspCode":200}}]'
 elif [[ $target == *cmd=GetDevInfo* ]]; then
   [[ $body == *'testDelay'* ]] && sleep 1
   respond 'application/json' '[{"cmd":"GetDevInfo","code":0,"value":{"DevInfo":{"model":"RLC-Fixture","firmVer":"v1"}}},{"cmd":"GetAbility","code":0,"value":{"Ability":{"ptzCtrl":{"permit":1},"whiteLed":{"ver":1},"audioAlarm":{"ver":1},"search":{"ver":1},"supportAi":{"people":{"ver":1},"vehicle":{"ver":1}}}}},{"cmd":"GetChannelstatus","code":0,"value":{"status":[{"channel":0,"name":"Front Door","online":1}]}},{"cmd":"GetNetPort","code":0,"value":{"NetPort":{"rtspPort":{"enable":1}}}},{"cmd":"GetEnc","code":0,"value":{"Enc":{"mainStream":{"vType":"h265"},"subStream":{"vType":"h264"}}}}]'

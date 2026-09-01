@@ -91,6 +91,17 @@ api=$(jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[
 ]}' <<<"$base" | "$plugin_root/scripts/reolink-http")
 jq -e 'map(.cmd) | index("GetChannelstatus") != null' <<<"$api" >/dev/null
 
+zoom_state=$(jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[
+  {cmd:"GetZoomFocus",action:0,param:{channel:0}}
+]}' <<<"$base" | "$plugin_root/scripts/reolink-http")
+jq -e '.[0].value.ZoomFocus.zoom.pos == 14' <<<"$zoom_state" >/dev/null
+
+zoom_result=$(jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[
+  {cmd:"StartZoomFocus",action:0,param:{ZoomFocus:{channel:0,op:"ZoomPos",pos:15}}}
+]}' <<<"$base" | "$plugin_root/scripts/reolink-http")
+jq -e '.[0].code == 0' <<<"$zoom_result" >/dev/null
+grep -Fxq 'ZoomPos:15' "$FAKE_CAMERA_TRACE"
+
 snapshot=$(jq -c '. + {operation:"snapshot",token:"SAFE_SESSION_TOKEN",channel:0}' <<<"$base" \
   | "$plugin_root/scripts/reolink-http")
 snapshot_path=$(jq -r '.path' <<<"$snapshot")
@@ -133,7 +144,7 @@ if jq -c '. + {operation:"api",token:"SAFE_SESSION_TOKEN",body:[{cmd:"PtzCtrl",a
   exit 1
 fi
 
-ptz_result=$(jq -c '. + {operation:"ptz-pulse",token:"SAFE_SESSION_TOKEN",channel:0,direction:"Left",durationMs:100}' <<<"$base" \
+ptz_result=$(jq -c '. + {operation:"ptz-pulse",token:"SAFE_SESSION_TOKEN",channel:0,direction:"Left",durationMs:100,speed:8}' <<<"$base" \
   | "$plugin_root/scripts/reolink-http")
 jq -e '.ok == true' <<<"$ptz_result" >/dev/null
 grep -Fxq 'Left' "$FAKE_CAMERA_TRACE"
@@ -141,10 +152,10 @@ grep -Fxq 'Stop' "$FAKE_CAMERA_TRACE"
 
 trace_lines=$(wc -l <"$FAKE_CAMERA_TRACE")
 deadline_started=$(date +%s%3N)
-deadline_result=$(jq -c '. + {operation:"ptz-pulse",token:"SAFE_SESSION_TOKEN",channel:0,direction:"Down",durationMs:200}' <<<"$base" \
+deadline_result=$(jq -c '. + {operation:"ptz-pulse",token:"SAFE_SESSION_TOKEN",channel:0,direction:"Down",durationMs:200,speed:8}' <<<"$base" \
   | "$plugin_root/scripts/reolink-http" 2>/dev/null || true)
 deadline_elapsed=$(($(date +%s%3N) - deadline_started))
-jq -e '.error.code == "timeout"' <<<"$deadline_result" >/dev/null
+jq -e '.ok == true' <<<"$deadline_result" >/dev/null
 ((deadline_elapsed < 2000))
 for _ in {1..100}; do
   tail -n "+$((trace_lines + 1))" "$FAKE_CAMERA_TRACE" | grep -Fxq 'Stop' && break
@@ -155,7 +166,7 @@ deadline_trace=$(tail -n "+$((trace_lines + 1))" "$FAKE_CAMERA_TRACE")
 [[ $(sed -n '2p' <<<"$deadline_trace") == Stop ]]
 
 trace_lines=$(wc -l <"$FAKE_CAMERA_TRACE")
-jq -c '. + {operation:"ptz-pulse",token:"SAFE_SESSION_TOKEN",channel:0,direction:"Right",durationMs:1500}' <<<"$base" \
+jq -c '. + {operation:"ptz-pulse",token:"SAFE_SESSION_TOKEN",channel:0,direction:"Right",durationMs:1500,speed:8}' <<<"$base" \
   | "$plugin_root/scripts/reolink-http" >"$test_root/ptz-cancel.out" &
 ptz_pid=$!
 for _ in {1..100}; do
@@ -176,7 +187,7 @@ cancel_trace=$(tail -n "+$((trace_lines + 1))" "$FAKE_CAMERA_TRACE")
 sleep 0.2
 
 trace_lines=$(wc -l <"$FAKE_CAMERA_TRACE")
-jq -c '. + {operation:"ptz-pulse",token:"SAFE_SESSION_TOKEN",channel:0,direction:"Up",durationMs:1500}' <<<"$base" \
+jq -c '. + {operation:"ptz-pulse",token:"SAFE_SESSION_TOKEN",channel:0,direction:"Up",durationMs:1500,speed:8}' <<<"$base" \
   | "$plugin_root/scripts/reolink-http" >"$test_root/ptz-hard-kill.out" &
 ptz_pid=$!
 for _ in {1..100}; do

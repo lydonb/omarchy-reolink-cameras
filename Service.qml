@@ -172,14 +172,14 @@ Item {
     if (runtime && camera.capabilities.ptz.enabled) runtime.startPtz(camera, direction)
   }
 
-  function stopPtz() {
+  function stopPtz(immediate) {
     var camera = selectedCamera
     var runtime = camera ? runtimeForHost(camera.hostId) : null
-    if (runtime) runtime.stopPtz(camera)
+    if (runtime) runtime.stopPtz(camera, immediate === true)
   }
 
   function stopAllPtz() {
-    for (var hostId in runtimes) if (runtimes[hostId]) runtimes[hostId].stopPtz(null)
+    for (var hostId in runtimes) if (runtimes[hostId]) runtimes[hostId].stopPtz(null, true)
   }
 
   function gotoPreset(presetId) {

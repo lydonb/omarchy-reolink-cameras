@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Make a clicked PTZ direction or Stop control visibly depress, fill with the
+  accent color, gain a high-contrast border, and show its action for 900 ms;
+  keep that feedback at panel scope so camera refreshes cannot erase it.
+- Make ordinary PTZ arrow clicks visible by preserving a brief, bounded camera
+  movement at a controllable speed while keeping immediate Stop and
+  panel-close safety behavior.
+- Clarify when a camera, such as a fixed video doorbell, reports no motorized
+  or physical controls.
+- Use the current nested absolute-position API for E1 Zoom controls instead of
+  the legacy increment/decrement payload rejected by newer firmware.
 - Place the camera panel at the screen's right margin instead of forcing it to
   the center or leaving space for neighboring bar widgets.
 - Add an in-panel **Clear events** action that removes recent camera events,

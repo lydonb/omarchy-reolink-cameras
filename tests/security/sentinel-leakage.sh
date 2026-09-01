@@ -195,7 +195,7 @@ grep -Fxq 'password-received' "$FAKE_CAMERA_TRACE"
 grep -Fxq 'token-received' "$FAKE_CAMERA_TRACE"
 
 ptz_trace_lines=$(wc -l <"$FAKE_CAMERA_TRACE")
-ptz_payload=$(printf '{"operation":"ptz-pulse","hostId":"%s","address":"127.0.0.1","port":%s,"transport":"http","tlsMode":"verify","username":"admin","token":"%s","channel":0,"direction":"Down","durationMs":1500}' \
+ptz_payload=$(printf '{"operation":"ptz-pulse","hostId":"%s","address":"127.0.0.1","port":%s,"transport":"http","tlsMode":"verify","username":"admin","token":"%s","channel":0,"direction":"Down","durationMs":1500,"speed":8}' \
   "$host_id" "$port" "$token")
 "$plugin_root/scripts/reolink-http" < <(printf '%s\n' "$ptz_payload") \
   >"$test_root/ptz.out" 2>"$test_root/ptz.err" &

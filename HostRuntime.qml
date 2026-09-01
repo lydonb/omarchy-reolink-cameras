@@ -6,6 +6,7 @@ import "lib/ReolinkCommands.js" as Commands
 import "lib/ReolinkModel.js" as Model
 import "lib/CapabilityNormalizer.js" as Capabilities
 import "lib/EventNormalizer.js" as Events
+import "lib/PtzTiming.js" as PtzTiming
 import "lib/RequestQueue.js" as RequestQueue
 import "lib/Time.js" as Time
 
@@ -30,9 +31,11 @@ Item {
   property bool authenticating: false
   property int backoffIndex: 0
   property int ptzChannel: -1
+  property double ptzStartedAt: 0
   property bool eventsEnabled: true
 
   readonly property var backoffIntervals: [2000, 5000, 10000, 30000, 60000]
+  readonly property int minimumPtzPulseMs: 300
   readonly property bool ready: runtimeState === "online" || runtimeState === "degraded"
 
   function enqueue(kind, envelope, callback, priority, coalesceKey, safetyOff) {
@@ -182,14 +185,20 @@ Item {
 
   function startPtz(camera, direction) {
     if (!ready || !token || ptzProcess.running || ptzStopProcess.running) return
+    ptzMinimumTimer.stop()
     ptzChannel = camera.channel
+    ptzStartedAt = Date.now()
     ptzProcess.canceledSafely = false
-    ptzProcess.input = JSON.stringify(Commands.ptzPulseEnvelope(host, token, camera.channel, direction, 1200))
+    // The E1 Zoom needs about 300 ms at its normal low-medium speed to move
+    // reliably from rest. Keep the helper's hard Stop
+    // deadline independent from how quickly the camera returns its response.
+    ptzProcess.input = JSON.stringify(Commands.ptzPulseEnvelope(host, token, camera.channel, direction, 300, 8))
     ptzProcess.running = true
   }
 
-  function stopPtz(camera) {
-    var channel = camera ? camera.channel : ptzChannel
+  function finishPtzStop(channel) {
+    ptzMinimumTimer.stop()
+    ptzStartedAt = 0
     ptzChannel = -1
     if (ptzProcess.running) {
       ptzProcess.canceledSafely = true
@@ -198,6 +207,18 @@ Item {
     if (channel < 0 || !token || ptzStopProcess.running) return
     ptzStopProcess.input = JSON.stringify(Commands.apiEnvelope(host, token, Commands.ptz(channel, "Stop", 24, 0)))
     ptzStopProcess.running = true
+  }
+
+  function stopPtz(camera, immediate) {
+    var channel = camera ? camera.channel : ptzChannel
+    var remaining = immediate === true ? 0
+      : PtzTiming.remainingMinimum(ptzStartedAt, Date.now(), minimumPtzPulseMs)
+    if (channel >= 0 && ptzProcess.running && remaining > 0) {
+      ptzMinimumTimer.interval = remaining
+      ptzMinimumTimer.restart()
+      return
+    }
+    finishPtzStop(channel)
   }
 
   function gotoPreset(camera, presetId) {
@@ -220,8 +241,19 @@ Item {
   }
 
   function changeZoom(camera, direction) {
-    sendControl("zoom", Commands.zoom(camera.channel, direction), null,
-      "zoom:" + camera.channel, false)
+    sendControl("zoom-state", Commands.zoomState(camera.channel), function(ok, response) {
+      if (!ok) return
+      var currentPosition = Capabilities.zoomPosition(response, camera.channel)
+      if (currentPosition < 0) {
+        root.service.lastError = "Camera returned an invalid zoom position."
+        return
+      }
+      var targetPosition = Math.max(0, Math.min(255,
+        currentPosition + (direction > 0 ? 1 : -1)))
+      if (targetPosition === currentPosition) return
+      root.sendControl("zoom", Commands.zoom(camera.channel, targetPosition), null,
+        "zoom:" + camera.channel, false)
+    }, "zoom-state:" + camera.channel, false)
   }
 
   function setSpotlight(camera, enabled) {
@@ -302,6 +334,8 @@ Item {
     eventTimer.stop()
     statusTimer.stop()
     retryTimer.stop()
+    ptzMinimumTimer.stop()
+    ptzStartedAt = 0
     if (ptzProcess.running) {
       ptzProcess.canceledSafely = true
       ptzProcess.running = false
@@ -392,4 +426,9 @@ Item {
     onTriggered: root.refreshSelectedSnapshot()
   }
   Timer { id: retryTimer; repeat: false; onTriggered: root.login() }
+  Timer {
+    id: ptzMinimumTimer
+    repeat: false
+    onTriggered: root.finishPtzStop(root.ptzChannel)
+  }
 }
