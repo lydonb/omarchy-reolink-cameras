@@ -9,6 +9,7 @@ mkdir -p -- "$test_root/home" "$test_root/config" "$test_root/cache" "$test_root
   "$test_root/smoke/lib" "$test_root/smoke/fixtures"
 chmod 700 -- "$test_root/runtime"
 cp -- "$plugin_root/tests/qml/LogicSmoke.qml" "$test_root/smoke/shell.qml"
+cp -- "$plugin_root/Service.qml" "$plugin_root/HostRuntime.qml" "$test_root/smoke/"
 cp -- "$plugin_root"/lib/*.js "$test_root/smoke/lib/"
 cp -- "$plugin_root/tests/fixtures/device-matrix.json" "$test_root/smoke/fixtures/"
 

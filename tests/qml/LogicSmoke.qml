@@ -11,6 +11,10 @@ import "lib/ReolinkCommands.js" as Commands
 import "lib/Time.js" as Time
 
 ShellRoot {
+  Service {
+    id: serviceUnderTest
+  }
+
   FileView {
     id: matrixFile
     path: Qt.resolvedUrl("fixtures/device-matrix.json")
@@ -287,5 +291,17 @@ ShellRoot {
       "notification process arguments leaked endpoint data")
     assertTrue(notificationCommand[notificationCommand.length - 1] === "{}",
       "notification click could execute something other than opening the UI")
+
+    serviceUnderTest.events = [
+      { id: "person-1", type: "person", viewed: false },
+      { id: "motion-1", type: "motion", viewed: true }
+    ]
+    serviceUnderTest.notificationQueue = [{ headline: "Person detected" }]
+    assertTrue(serviceUnderTest.unseenCount === 1, "unseen event fixture was not counted")
+    serviceUnderTest.clearEvents()
+    assertTrue(serviceUnderTest.events.length === 0 && serviceUnderTest.unseenCount === 0,
+      "clearing recent events did not reset the badge")
+    assertTrue(serviceUnderTest.notificationQueue.length === 0,
+      "clearing recent events retained queued notifications")
   }
 }

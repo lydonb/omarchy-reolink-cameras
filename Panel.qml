@@ -499,7 +499,24 @@ Panel {
                 visible: root.view === "events"
                 width: parent.width
                 spacing: Style.space(5)
-                PanelSectionHeader { text: "RECENT EVENTS"; foreground: root.foreground; fontFamily: root.fontFamily }
+                Row {
+                  width: parent.width
+                  spacing: Style.space(8)
+                  PanelSectionHeader {
+                    width: parent.width - clearEventsButton.width - parent.spacing
+                    text: "RECENT EVENTS"
+                    foreground: root.foreground
+                    fontFamily: root.fontFamily
+                  }
+                  Button {
+                    id: clearEventsButton
+                    enabled: root.effectiveService && root.effectiveService.events.length > 0
+                    text: "Clear events"
+                    foreground: root.foreground
+                    bordered: true
+                    onClicked: if (root.effectiveService) root.effectiveService.clearEvents()
+                  }
+                }
                 Text {
                   visible: root.effectiveService && root.effectiveService.events.length === 0
                   text: "No recent events. Event polling continues while this panel is closed."

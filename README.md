@@ -123,8 +123,8 @@ is available.
 - explicit snapshot refresh plus private photo export to the XDG Pictures
   directory, organized under `Reolink/YYYY-MM-DD`;
 - Fluent/sub and Clear/main playback through hardened mpv IPC;
-- batched per-host event polling, rising edges, cooldown, unseen badge, and
-  safe UI-only notification clicks;
+- batched per-host event polling, rising edges, cooldown, an unseen badge with
+  an in-panel **Clear events** action, and safe UI-only notification clicks;
 - capability-gated PTZ, presets, zoom, spotlight, and confirmed siren controls;
 - bounded same-host recording search and playback path;
 - event **View** actions that find and open the nearest playable recording on

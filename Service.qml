@@ -281,6 +281,13 @@ Item {
     events = next
   }
 
+  function clearEvents() {
+    events = []
+    notificationQueue = []
+    lastError = ""
+    notice = "Recent events cleared."
+  }
+
   function queueNotification(event) {
     var notification = Events.notification(event.type)
     var queue = notificationQueue.slice()

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add an in-panel **Clear events** action that removes recent camera events,
+  resets the unseen badge, and drops notifications that are still queued.
+
 ## 0.2.6 - 2026-08-28
 
 - Document the exact Omarchy removal command, MIT licensing, and the project's
