@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Place the camera panel at the screen's right margin instead of forcing it to
+  the center or leaving space for neighboring bar widgets.
 - Add an in-panel **Clear events** action that removes recent camera events,
   resets the unseen badge, and drops notifications that are still queued.
 

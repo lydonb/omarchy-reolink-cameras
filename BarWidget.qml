@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Quickshell
 import qs.Ui
 
 BarWidget {
@@ -20,7 +21,7 @@ BarWidget {
     if (!target) return
     target.bar = root.bar
     target.settings = root.settings
-    target.anchorItem = button
+    target.anchorItem = rightEdgeAnchor
     target.hostWidget = root
     target.service = root.reolinkService
   }
@@ -46,6 +47,18 @@ BarWidget {
       root.injectPanel()
       Qt.callLater(root.injectPanel)
     }
+  }
+
+  // KeyboardPanel centers itself on its anchor and then clamps to the screen.
+  // Extending this non-visual anchor toward the right edge makes the clamp
+  // deterministic even when other widgets sit after Reolink in the bar.
+  Item {
+    id: rightEdgeAnchor
+    anchors.left: button.left
+    anchors.top: button.top
+    width: button.width + (button.QsWindow.window ? button.QsWindow.window.width : 0)
+    height: button.height
+    visible: false
   }
 
   WidgetButton {
