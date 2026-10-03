@@ -19,8 +19,15 @@ Item {
 
   readonly property string pluginId: manifest && manifest.id
     ? String(manifest.id) : "io.github.rodrix2000.reolink-cameras"
-  readonly property string pluginRoot: manifest && manifest.__sourceDir
-    ? String(manifest.__sourceDir) : ""
+  // Omarchy 4.0.4+ strips manifest.__sourceDir from third-party plugins, so
+  // fall back to this file's own directory (Service.qml sits at the plugin root).
+  readonly property string pluginRoot: {
+    if (manifest && manifest.__sourceDir) return String(manifest.__sourceDir)
+    var resolved = String(Qt.resolvedUrl("."))
+    if (resolved.indexOf("file://") !== 0) return ""
+    resolved = decodeURIComponent(resolved.slice("file://".length))
+    return resolved.endsWith("/") ? resolved.slice(0, -1) : resolved
+  }
   readonly property string httpHelper: pluginRoot + "/scripts/reolink-http"
   readonly property string playerHelper: pluginRoot + "/scripts/reolink-player"
   readonly property string snapshotExportHelper: pluginRoot + "/scripts/reolink-snapshot-export"
